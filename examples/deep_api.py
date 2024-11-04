@@ -2,10 +2,10 @@ import os
 import glob
 
 from srtranslator import SrtFile
-from srtranslator.translators.deepl_api import DeeplApi
+from srtranslator.translators.deepl_api import DeepLApi
 
 folder = "srt_test/"
-translator = DeeplApi(api_key="YOUR_API_KEY")
+translator = DeepLApi(api_key="YOUR_API_KEY")
 
 for filepath in glob.glob(os.path.join(folder, "**/*.srt"), recursive=True):
     srt = SrtFile(filepath)

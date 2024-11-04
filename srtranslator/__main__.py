@@ -5,7 +5,7 @@ import traceback
 
 from .srt_file import SrtFile
 from .ass_file import AssFile
-from .translators.deepl_api import DeeplApi
+from .translators.deepl_api import DeeplApi, DeepLApi
 from .translators.deepl_scrap import DeeplTranslator
 from .translators.translatepy import TranslatePy
 from .translators.pydeeplx import PyDeepLX
@@ -92,7 +92,7 @@ parser.add_argument(
 
 builtin_translators = {
     "deepl-scrap": DeeplTranslator,
-    "deepl-api": DeeplApi,
+    "deepl-api": DeepLApi,
     "translatepy": TranslatePy,
     "pydeeplx": PyDeepLX,
 }
