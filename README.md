@@ -2,6 +2,20 @@
 
 ## Install
 
+### Using pipx (Recommended)
+
+[pipx](https://pypa.github.io/pipx/) is the recommended way to install command-line Python applications. It creates an isolated environment for the application and its dependencies.
+
+```bash
+# Install directly from GitHub
+pipx install git+https://github.com/tinof/SRTranslator.git@pipx-cli-only
+
+# Or install from PyPI
+pipx install srtranslator
+```
+
+### Using pip
+
 [PyPI](https://pypi.org/project/srtranslator/)
 
 ```bash
@@ -63,12 +77,25 @@ translator.quit()
 
 ## Usage from CLI
 
+After installing with pipx, you can use the `srtranslator` command directly:
+
 ```bash
 # SRT file
-python -m srtranslator ./filepath/to/srt -i SRC_LANG -o DEST_LANG
+srtranslator ./filepath/to/srt -i SRC_LANG -o DEST_LANG
 
 # ASS file
-python -m srtranslator ./filepath/to/ass -i SRC_LANG -o DEST_LANG
+srtranslator ./filepath/to/ass -i SRC_LANG -o DEST_LANG
+
+# Using DeepL API
+srtranslator ./filepath/to/srt -t deepl-api --auth YOUR_API_KEY
+
+# Custom wrap limit with verbose output
+srtranslator ./filepath/to/srt -w 60 -v
+```
+
+If installed with pip, you can also use:
+```bash
+python -m srtranslator ./filepath/to/file -i SRC_LANG -o DEST_LANG
 ```
 
 ## Command Line Arguments
@@ -112,7 +139,7 @@ options:
   -s, --show-browser    Show browser window
   -w WRAP_LIMIT, --wrap-limit WRAP_LIMIT
                         Number of characters -including spaces- to wrap a line of text. Default: 50
-  -t {deepl-scrap,translatepy,deepl-api}, --translator {deepl-scrap,translatepy,deepl-api,pydeeplx}
+  -t {deepl-scrap,translatepy,deepl-api,pydeeplx}, --translator {deepl-scrap,translatepy,deepl-api,pydeeplx}
                         Built-in translator to use
   --auth AUTH           Api key if needed on translator
   --proxies             Use proxy by default for pydeeplx
