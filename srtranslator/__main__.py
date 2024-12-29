@@ -90,34 +90,38 @@ builtin_translators = {
     "pydeeplx": PyDeepLX,
 }
 
-args = parser.parse_args()
-logging.basicConfig(level=args.loglevel)
+def main():
+    args = parser.parse_args()
+    logging.basicConfig(level=args.loglevel)
 
-try:
-    os.environ.pop("MOZ_HEADLESS")
-except:
-    pass
+    try:
+        os.environ.pop("MOZ_HEADLESS")
+    except:
+        pass
 
-translator_args = {}
-if args.auth:
-    translator_args["api_key"] = args.auth
-if args.proxies:
-    translator_args["proxies"] = args.proxies    
+    translator_args = {}
+    if args.auth:
+        translator_args["api_key"] = args.auth
+    if args.proxies:
+        translator_args["proxies"] = args.proxies    
 
-translator = builtin_translators[args.translator](**translator_args)
+    translator = builtin_translators[args.translator](**translator_args)
 
-try:
-    sub = AssFile(args.filepath)
-except AttributeError:
-    print("... Exception while loading as ASS try as SRT")
-    sub = SrtFile(args.filepath)
+    try:
+        sub = AssFile(args.filepath)
+    except AttributeError:
+        print("... Exception while loading as ASS try as SRT")
+        sub = SrtFile(args.filepath)
 
-try:
-    sub.translate(translator, args.src_lang, args.dest_lang)
-    sub.wrap_lines(args.wrap_limit)
-    sub.save(f"{os.path.splitext(args.filepath)[0]}_{args.dest_lang}{os.path.splitext(args.filepath)[1]}")
-except:
-    sub.save_backup()
-    traceback.print_exc()
+    try:
+        sub.translate(translator, args.src_lang, args.dest_lang)
+        sub.wrap_lines(args.wrap_limit)
+        sub.save(f"{os.path.splitext(args.filepath)[0]}_{args.dest_lang}{os.path.splitext(args.filepath)[1]}")
+    except:
+        sub.save_backup()
+        traceback.print_exc()
 
-translator.quit()
+    translator.quit()
+
+if __name__ == "__main__":
+    main()

@@ -18,4 +18,9 @@ setup(
     install_requires=requirements,
     packages=find_packages(),
     keywords=["python", "srt", "languages", "translator", "subtitles"],
+    entry_points={
+        "console_scripts": [
+            "srtranslator=srtranslator.__main__:main",
+        ],
+    },
 )
