@@ -61,33 +61,7 @@ Quit translator
 translator.quit()
 ```
 
-## Usage from GUI
-
-Since release V0.3.9 there is a new GUI powered by flet (a python-flutter framework) on folder ./GUI
-
-![image](./GUI/assets/screen_shot.png)
-
-There is an artifact for linux and windows in the lastest github actions run.
-
-#### Package from source
-
-if you prefer to pack your own you could go to GUI folder, install the requirements and run `flet pack main.py` and copy assets folder
-
-```
-cd ./GUI
-pip install -r requirements.txt
-pip install pyinstaller
-flet pack main.py
-cp -r ./assets ./dist/assets
-```
-
-Binaries found in `dist` folder
-
-#### Alternatives
-
-[KryptoST](https://github.com/KryptoST) has made a graphical user interface. You can check it out [here](https://github.com/KryptoST/SRTranslatorGUI)
-
-## Usage command line
+## Usage from CLI
 
 ```bash
 # SRT file
@@ -95,6 +69,26 @@ python -m srtranslator ./filepath/to/srt -i SRC_LANG -o DEST_LANG
 
 # ASS file
 python -m srtranslator ./filepath/to/ass -i SRC_LANG -o DEST_LANG
+```
+
+## Command Line Arguments
+
+```
+usage: srtranslator [-h] [-i SRC_LANG] [-o DEST_LANG] [-v] [-vv] [-w WRAP_LIMIT]
+                    path
+
+Translate an .STR and .ASS file
+
+positional arguments:
+  path                  File to translate
+
+optional arguments:
+  -h, --help           show this help message and exit
+  -i, --src-lang       Source language. Default: auto
+  -o, --dest-lang      Destination language. Default: es (spanish)
+  -v, --verbose        Increase output verbosity
+  -vv, --debug         Increase output verbosity for debugging
+  -w, --wrap-limit     Number of characters -including spaces- to wrap a line of text. Default: 50
 ```
 
 ## Advanced usage
@@ -122,4 +116,3 @@ options:
                         Built-in translator to use
   --auth AUTH           Api key if needed on translator
   --proxies             Use proxy by default for pydeeplx
-```

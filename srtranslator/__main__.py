@@ -55,13 +55,6 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "-s",
-    "--show-browser",
-    action="store_true",
-    help="Show browser window",
-)
-
-parser.add_argument(
     "-w",
     "--wrap-limit",
     type=int,
@@ -104,9 +97,6 @@ try:
     os.environ.pop("MOZ_HEADLESS")
 except:
     pass
-
-if not args.show_browser:
-    os.environ["MOZ_HEADLESS"] = "1"
 
 translator_args = {}
 if args.auth:

@@ -64,7 +64,6 @@ def create_driver(proxy: Optional[Proxy] = None) -> WebDriver:
 
         driver = webdriver.Firefox(proxy=proxy)
 
-    driver.maximize_window()
     return driver
 
 
