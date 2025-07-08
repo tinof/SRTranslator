@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  srtranslator:
+    build:
+      context: .
+    volumes:
+      - /somemydir:/input
+      - ./output:/output
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    environment:
+      - DISPLAY=${DISPLAY}
+      - PYTHONUNBUFFERED=1
+    command: python -m srtranslator /input/somemyfileoutput.srt -i ru -o en-US -t deepl-scrap --wrap-limit 60 --show-browser
