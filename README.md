@@ -8,6 +8,10 @@
   ```bash
   pipx install srtranslator
   ```
+- pipx from this fork (installs directly from `tinof/SRTranslator`):
+  ```bash
+  pipx install git+https://github.com/tinof/SRTranslator.git
+  ```
 - pip:
   ```bash
   pip install srtranslator
