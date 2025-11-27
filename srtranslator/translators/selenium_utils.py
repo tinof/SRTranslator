@@ -38,7 +38,7 @@ def create_proxy(country_id: Optional[List[str]] = ["US"]) -> Proxy:
                 )
             )
             return proxy
-        except:
+        except Exception:
             logging.info("Exception while getting Proxy. Trying again")
             i += 1
 
@@ -87,7 +87,7 @@ class BaseElement:
                 lambda driver: EC.element_to_be_clickable(locator)
             )
             self.element = find_element(*locator)
-        except:
+        except Exception:
             if optional:
                 self.element = None
                 return
@@ -137,6 +137,6 @@ class Button(BaseElement):
             can_click = getattr(self.element, "click", None)
             if callable(can_click):
                 self.element.click()
-        except:
+        except Exception:
             # Using javascript if usual click function does not work
             self.driver.execute_script("arguments[0].click();", self.element)

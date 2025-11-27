@@ -2,7 +2,7 @@ import os
 import glob
 
 from selenium import webdriver
-from srtranslator import SrtFile, srt_files_in_folder
+from srtranslator import SrtFile
 from srtranslator.translators.deepl_scrap import DeeplTranslator
 
 profile = webdriver.FirefoxProfile()

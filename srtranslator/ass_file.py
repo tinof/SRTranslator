@@ -2,7 +2,7 @@ import os
 import re
 import pyass
 
-from typing import List, Generator
+from typing import Generator
 
 from .translators.base import Translator
 from .util import show_progress
@@ -345,7 +345,7 @@ class AssFile:
                 len(self.subtitles.events), progress=self.current_subtitle
             )
 
-        print(f"... Translation done")
+        print("... Translation done")
 
     def save_backup(self):
         self.subtitles.events = self.subtitles.events[: self.current_subtitle]

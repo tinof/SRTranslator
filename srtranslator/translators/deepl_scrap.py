@@ -3,7 +3,6 @@ import logging
 
 from typing import Optional
 from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.webdriver.common.proxy import Proxy
 from selenium.webdriver.common.keys import Keys
 
 from .base import Translator, TimeOutException
@@ -12,7 +11,6 @@ from .selenium_utils import (
     create_driver,
     TextArea,
     Button,
-    Text,
 )
 
 
@@ -25,7 +23,6 @@ class DeeplTranslator(Translator):
         "zh": "Chinese",  # Only usable for source language
         "zh-Hans": "Chinese (Simplified)",  # Only usable for destination language
         "zh-Hant": "Chinese (Traditional)",  # Only usable for destination language
-        "zh": "Chinese",
         "cs": "Czech",
         "da": "Danish",
         "nl": "Dutch",

@@ -36,7 +36,7 @@ class PyDeepLX(BaseTranslator):
                     text, source_language, destination_language, proxies=self.proxies
                 )
 
-                if result == None:
+                if result is None:
                     print("...... Exception: result is empty raise exception")
                     raise Exception("Result is empty")
 

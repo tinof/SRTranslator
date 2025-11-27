@@ -1,1 +1,1 @@
-from .base import Translator
+from .base import Translator as Translator

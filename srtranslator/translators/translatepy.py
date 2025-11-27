@@ -1,5 +1,4 @@
 from translatepy import Translator
-from translatepy.exceptions import TranslatepyException, UnknownLanguage
 
 from .base import Translator as BaseTranslator
 
