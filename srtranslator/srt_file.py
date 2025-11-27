@@ -156,6 +156,140 @@ class SrtFile:
         # Join sentences with line break
         return "\n".join(wraped_lines)
 
+    def _detect_scenes(self, scene_gap_seconds: float = 2.0) -> List[int]:
+        """Detect scene boundaries based on time gaps between subtitles.
+
+        Args:
+            scene_gap_seconds (float): Minimum gap in seconds to consider a new scene
+
+        Returns:
+            List[int]: List of subtitle indices where new scenes start
+        """
+        scene_starts = [0]  # First subtitle is always a scene start
+
+        for i in range(1, len(self.subtitles)):
+            prev_sub = self.subtitles[i - 1]
+            curr_sub = self.subtitles[i]
+
+            # Calculate gap between end of previous and start of current
+            gap = (curr_sub.start - prev_sub.end).total_seconds()
+
+            if gap >= scene_gap_seconds:
+                scene_starts.append(i)
+
+        return scene_starts
+
+    def _build_deepl_context(
+        self,
+        scene_index: int,
+        chunk_start_idx: int,
+        chunk_end_idx: int,
+        scene_start_idx: int,
+        scene_end_idx: int,
+        max_history_chars_before: int = 2000,
+        max_history_chars_after: int = 1000,
+        max_summary_chars: int = 2000,
+    ) -> str | None:
+        """Build DeepL context parameter (llm-subtrans style).
+
+        Context contains ONLY surrounding lines in source language, NOT the current chunk.
+
+        Args:
+            scene_index: Current scene number
+            chunk_start_idx: First subtitle index in current chunk
+            chunk_end_idx: Last subtitle index in current chunk
+            scene_start_idx: First subtitle index in current scene
+            scene_end_idx: Last subtitle index in current scene
+            max_history_chars_before: Max chars for previous dialogue
+            max_history_chars_after: Max chars for upcoming dialogue
+            max_summary_chars: Max chars for distant scene summary
+
+        Returns:
+            str: Formatted context string for DeepL
+        """
+        # Build history_before: walk backwards from chunk_start_idx - 1
+        history_before_lines = []
+        current_before_chars = 0
+
+        for i in range(chunk_start_idx - 1, scene_start_idx - 1, -1):
+            line_content = self.subtitles[i].content.strip()
+            if not line_content or line_content == "...":
+                continue
+
+            # Format: "line_num. content"
+            formatted_line = f"{i + 1}. {line_content}"
+            line_length = len(formatted_line) + 1  # +1 for newline
+
+            if current_before_chars + line_length > max_history_chars_before:
+                break
+
+            history_before_lines.insert(
+                0, formatted_line
+            )  # Prepend to keep chronological
+            current_before_chars += line_length
+
+        # Build history_after: walk forwards from chunk_end_idx + 1
+        history_after_lines = []
+        current_after_chars = 0
+
+        for i in range(chunk_end_idx + 1, scene_end_idx + 1):
+            line_content = self.subtitles[i].content.strip()
+            if not line_content or line_content == "...":
+                continue
+
+            formatted_line = f"{i + 1}. {line_content}"
+            line_length = len(formatted_line) + 1
+
+            if current_after_chars + line_length > max_history_chars_after:
+                break
+
+            history_after_lines.append(formatted_line)
+            current_after_chars += line_length
+
+        # Optional: Build scene summary for very distant history
+        scene_summary_lines = []
+        if chunk_start_idx - scene_start_idx > len(history_before_lines) + 5:
+            # There's distant history not captured in history_before
+            summary_chars = 0
+            for i in range(
+                scene_start_idx, chunk_start_idx - len(history_before_lines)
+            ):
+                line_content = self.subtitles[i].content.strip()
+                if not line_content or line_content == "...":
+                    continue
+
+                # Truncate each line for summary (first 50 chars)
+                truncated = line_content[:50] + (
+                    "..." if len(line_content) > 50 else ""
+                )
+                summary_chars += len(truncated) + 1
+
+                if summary_chars > max_summary_chars:
+                    break
+
+                scene_summary_lines.append(truncated)
+
+        # Compose final context string
+        context_parts = []
+        context_parts.append(f"Scene {scene_index + 1}")
+
+        # Add distant summary if available
+        if scene_summary_lines:
+            context_parts.append("\nEarlier in this scene:")
+            context_parts.append("\n".join(scene_summary_lines))
+
+        # Add previous dialogue
+        if history_before_lines:
+            context_parts.append("\nPrevious dialogue:")
+            context_parts.append("\n".join(history_before_lines))
+
+        # Add upcoming dialogue
+        if history_after_lines:
+            context_parts.append("\nUpcoming dialogue:")
+            context_parts.append("\n".join(history_after_lines))
+
+        return "\n".join(context_parts) if len(context_parts) > 1 else None
+
     def translate(
         self,
         translator: Translator,
@@ -171,26 +305,76 @@ class SrtFile:
         """
         print("Starting translation")
 
-        # For each chunk of the file (based on the translator capabilities)
-        for subs_slice in self._get_next_chunk(translator.max_char):
-            # Put chunk in a single text with break lines
-            text = [sub.content for sub in subs_slice]
-            text = "\n".join(text)
+        # Detect scene boundaries
+        scene_starts = self._detect_scenes()
+        if os.environ.get("DEBUG_CONTEXT"):
+            print(f"Detected {len(scene_starts)} scenes in subtitle file")
 
-            # Translate
-            translation = translator.translate(
-                text, source_language, destination_language
+        # Build scene map (subtitle index -> (scene_idx, scene_start, scene_end))
+        scene_map = {}
+        for scene_idx, start_idx in enumerate(scene_starts):
+            end_idx = (
+                scene_starts[scene_idx + 1] - 1
+                if scene_idx + 1 < len(scene_starts)
+                else len(self.subtitles) - 1
+            )
+            for sub_idx in range(start_idx, end_idx + 1):
+                scene_map[sub_idx] = (scene_idx, start_idx, end_idx)
+
+        # For each chunk of the file (based on the translator capabilities)
+        chunk_num = 0
+        current_subtitle_idx = self.start_from
+
+        for subs_slice in self._get_next_chunk(translator.max_char):
+            chunk_num += 1
+            chunk_start_idx = current_subtitle_idx
+            chunk_end_idx = current_subtitle_idx + len(subs_slice) - 1
+
+            # Get scene info for this chunk
+            scene_idx, scene_start_idx, scene_end_idx = scene_map.get(
+                chunk_start_idx, (0, chunk_start_idx, chunk_end_idx)
             )
 
-            # Break each line back into subtitle content
-            translation = translation.splitlines()
+            # Build text array (only lines to translate)
+            text = [sub.content for sub in subs_slice]
+
+            # Build DeepL context (surrounding lines, NOT current chunk)
+            current_context = self._build_deepl_context(
+                scene_idx,
+                chunk_start_idx,
+                chunk_end_idx,
+                scene_start_idx,
+                scene_end_idx,
+            )
+
+            # Debug output
+            if os.environ.get("DEBUG_CONTEXT"):
+                if current_context:
+                    print(f"\n{'=' * 60}")
+                    print(
+                        f"[Chunk {chunk_num}] Lines {chunk_start_idx + 1}-{chunk_end_idx + 1}"
+                    )
+                    print(f"Context:\n{current_context}")
+                    print(f"{'=' * 60}")
+                else:
+                    print(f"\n[Chunk {chunk_num}] No context (start of scene)")
+
+            # Translate with context
+            translation = translator.translate(
+                text, source_language, destination_language, context=current_context
+            )
+
+            # Update subtitles with translations
+            if isinstance(translation, str):
+                translation = translation.splitlines()
             for i in range(len(subs_slice)):
                 subs_slice[i].content = translation[i]
                 self.current_subtitle += 1
+                current_subtitle_idx += 1
 
             self.progress_callback(len(self.subtitles), progress=self.current_subtitle)
 
-        print(f"... Translation done")
+        print("... Translation done")
 
     def save_backup(self):
         self.subtitles = self.subtitles[: self.current_subtitle]

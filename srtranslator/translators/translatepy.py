@@ -10,7 +10,9 @@ class TranslatePy(BaseTranslator):
     def __init__(self):
         self.translator = Translator()
 
-    def translate(self, text, source_language, destination_language):
+    def translate_single(
+        self, text, source_language, destination_language, context=None
+    ):
         result = self.translator.translate(
             text,
             source_language=source_language,

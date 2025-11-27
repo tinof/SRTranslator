@@ -17,7 +17,9 @@ class PyDeepLX(BaseTranslator):
             print("...... Use proxy")
             self.proxies = FreeProxy(rand=True, timeout=1).get()
 
-    def translate(self, text, source_language, destination_language):
+    def translate_single(
+        self, text, source_language, destination_language, context=None
+    ):
         # Sleep a random number of seconds (between 5 and 10)
         # https://www.shellhacks.com/python-sleep-random-time-web-scraping/
         RANDOM_WAIT = randint(5, 10)
@@ -28,18 +30,15 @@ class PyDeepLX(BaseTranslator):
         RETRY_COUNTER = 10
         result = None
 
-        while RETRY_COUNTER > 0 :
+        while RETRY_COUNTER > 0:
             try:
                 result = PDLX.translate(
-                    text,
-                    source_language,
-                    destination_language,
-                    proxies=self.proxies
+                    text, source_language, destination_language, proxies=self.proxies
                 )
 
                 if result == None:
-                  print("...... Exception: result is empty raise exception")
-                  raise Exception("Result is empty")
+                    print("...... Exception: result is empty raise exception")
+                    raise Exception("Result is empty")
 
                 # Everyting alright
                 break

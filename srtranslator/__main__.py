@@ -90,6 +90,19 @@ parser.add_argument(
     help="Use proxy by default for pydeeplx",
 )
 
+parser.add_argument(
+    "--context",
+    type=str,
+    help="Context for DeepL translation (only for deepl-api)",
+)
+
+parser.add_argument(
+    "--model-type",
+    type=str,
+    choices=["latency_optimized", "quality_optimized", "prefer_quality_optimized"],
+    help="Model type for DeepL translation (only for deepl-api)",
+)
+
 builtin_translators = {
     "deepl-scrap": DeeplTranslator,
     "deepl-api": DeeplApi,
@@ -111,8 +124,15 @@ if not args.show_browser:
 translator_args = {}
 if args.auth:
     translator_args["api_key"] = args.auth
-if args.proxies:
-    translator_args["proxies"] = args.proxies    
+
+if args.translator == "pydeeplx" and args.proxies:
+    translator_args["proxies"] = args.proxies
+
+if args.translator == "deepl-api":
+    if args.context:
+        translator_args["context"] = args.context
+    if args.model_type:
+        translator_args["model_type"] = args.model_type
 
 translator = builtin_translators[args.translator](**translator_args)
 
@@ -125,7 +145,9 @@ except AttributeError:
 try:
     sub.translate(translator, args.src_lang, args.dest_lang)
     sub.wrap_lines(args.wrap_limit)
-    sub.save(f"{os.path.splitext(args.filepath)[0]}_{args.dest_lang}{os.path.splitext(args.filepath)[1]}")
+    sub.save(
+        f"{os.path.splitext(args.filepath)[0]}_{args.dest_lang}{os.path.splitext(args.filepath)[1]}"
+    )
 except:
     sub.save_backup()
     traceback.print_exc()

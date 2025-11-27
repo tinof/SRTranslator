@@ -141,6 +141,108 @@ class AssFile:
             sub.text = sub.text.replace("////", "\n")
             sub.text = sub.text.replace(r" \\\\ ", r"\N")
 
+    def _detect_scenes(self, scene_gap_seconds: float = 2.0):
+        """Detect scene boundaries based on time gaps between subtitles."""
+        scene_starts = [0]
+
+        for i in range(1, len(self.subtitles.events)):
+            prev_sub = self.subtitles.events[i - 1]
+            curr_sub = self.subtitles.events[i]
+
+            gap = (curr_sub.start - prev_sub.end).total_seconds()
+
+            if gap >= scene_gap_seconds:
+                scene_starts.append(i)
+
+        return scene_starts
+
+    def _build_deepl_context(
+        self,
+        scene_index: int,
+        chunk_start_idx: int,
+        chunk_end_idx: int,
+        scene_start_idx: int,
+        scene_end_idx: int,
+        max_history_chars_before: int = 2000,
+        max_history_chars_after: int = 1000,
+        max_summary_chars: int = 2000,
+    ):
+        """Build DeepL context parameter (llm-subtrans style)."""
+        # Build history_before
+        history_before_lines = []
+        current_before_chars = 0
+
+        for i in range(chunk_start_idx - 1, scene_start_idx - 1, -1):
+            line_content = self.subtitles.events[i].text.strip()
+            if not line_content or line_content == "...":
+                continue
+
+            formatted_line = f"{i + 1}. {line_content}"
+            line_length = len(formatted_line) + 1
+
+            if current_before_chars + line_length > max_history_chars_before:
+                break
+
+            history_before_lines.insert(0, formatted_line)
+            current_before_chars += line_length
+
+        # Build history_after
+        history_after_lines = []
+        current_after_chars = 0
+
+        for i in range(chunk_end_idx + 1, scene_end_idx + 1):
+            line_content = self.subtitles.events[i].text.strip()
+            if not line_content or line_content == "...":
+                continue
+
+            formatted_line = f"{i + 1}. {line_content}"
+            line_length = len(formatted_line) + 1
+
+            if current_after_chars + line_length > max_history_chars_after:
+                break
+
+            history_after_lines.append(formatted_line)
+            current_after_chars += line_length
+
+        # Build scene summary for distant history
+        scene_summary_lines = []
+        if chunk_start_idx - scene_start_idx > len(history_before_lines) + 5:
+            summary_chars = 0
+            for i in range(
+                scene_start_idx, chunk_start_idx - len(history_before_lines)
+            ):
+                line_content = self.subtitles.events[i].text.strip()
+                if not line_content or line_content == "...":
+                    continue
+
+                truncated = line_content[:50] + (
+                    "..." if len(line_content) > 50 else ""
+                )
+                summary_chars += len(truncated) + 1
+
+                if summary_chars > max_summary_chars:
+                    break
+
+                scene_summary_lines.append(truncated)
+
+        # Compose final context string
+        context_parts = []
+        context_parts.append(f"Scene {scene_index + 1}")
+
+        if scene_summary_lines:
+            context_parts.append("\nEarlier in this scene:")
+            context_parts.append("\n".join(scene_summary_lines))
+
+        if history_before_lines:
+            context_parts.append("\nPrevious dialogue:")
+            context_parts.append("\n".join(history_before_lines))
+
+        if history_after_lines:
+            context_parts.append("\nUpcoming dialogue:")
+            context_parts.append("\n".join(history_after_lines))
+
+        return "\n".join(context_parts) if len(context_parts) > 1 else None
+
     def translate(
         self,
         translator: Translator,
@@ -156,30 +258,85 @@ class AssFile:
         """
         print("Starting translation")
 
-        # For each chunk of the file (based on the translator capabilities)
-        for subs_slice in self._get_next_chunk(translator.max_char):
-            # Put chunk in a single text with break lines
-            text = [sub.text for sub in subs_slice]
-            text = "\n".join(text)
+        # Detect scene boundaries
+        scene_starts = self._detect_scenes()
+        if os.environ.get("DEBUG_CONTEXT"):
+            print(f"Detected {len(scene_starts)} scenes in subtitle file")
 
-            # Translate
-            translation = translator.translate(
-                text, source_language, destination_language
+        # Build scene map
+        scene_map = {}
+        for scene_idx, start_idx in enumerate(scene_starts):
+            end_idx = (
+                scene_starts[scene_idx + 1] - 1
+                if scene_idx + 1 < len(scene_starts)
+                else len(self.subtitles.events) - 1
             )
+            for sub_idx in range(start_idx, end_idx + 1):
+                scene_map[sub_idx] = (scene_idx, start_idx, end_idx)
+
+        # For each chunk of the file (based on the translator capabilities)
+        chunk_num = 0
+        current_subtitle_idx = self.start_from
+
+        for subs_slice in self._get_next_chunk(translator.max_char):
+            chunk_num += 1
+            chunk_start_idx = current_subtitle_idx
+            chunk_end_idx = current_subtitle_idx + len(subs_slice) - 1
+
+            # Get scene info for this chunk
+            scene_idx, scene_start_idx, scene_end_idx = scene_map.get(
+                chunk_start_idx, (0, chunk_start_idx, chunk_end_idx)
+            )
+
+            # Build text array (only lines to translate)
+            text = [sub.text for sub in subs_slice]
+
+            # Build DeepL context (surrounding lines, NOT current chunk)
+            current_context = self._build_deepl_context(
+                scene_idx,
+                chunk_start_idx,
+                chunk_end_idx,
+                scene_start_idx,
+                scene_end_idx,
+            )
+
+            if os.environ.get("DEBUG_CONTEXT"):
+                if current_context:
+                    print(f"\n{'=' * 60}")
+                    print(
+                        f"[Chunk {chunk_num}] Lines {chunk_start_idx + 1}-{chunk_end_idx + 1}"
+                    )
+                    print(f"Context:\n{current_context}")
+                    print(f"{'=' * 60}")
+                else:
+                    print(f"\n[Chunk {chunk_num}] No context (start of scene)")
+
+            # Translate with context
+            translation = translator.translate(
+                text, source_language, destination_language, context=current_context
+            )
+
+            if isinstance(translation, str):
+                translation = translation.splitlines()
 
             # Manage ASS commands
             # Insert the styles back in the text instead of |
             self.text_styles.reverse()
-            translation_with_styles = ""
-            for i in translation.split(r"|"):
-                try:
-                    # We set i at the left part because the style must "replace" the "|"
-                    translation_with_styles += i + self.text_styles.pop()
-                except IndexError:
-                    translation_with_styles += i
 
-            # Break each line back into subtitle content
-            translation = translation_with_styles.splitlines()
+            final_translations = []
+            for line in translation:
+                line_with_styles = ""
+                parts = line.split(r"|")
+                for i, part in enumerate(parts):
+                    line_with_styles += part
+                    if i < len(parts) - 1:
+                        try:
+                            line_with_styles += self.text_styles.pop()
+                        except IndexError:
+                            pass
+                final_translations.append(line_with_styles)
+
+            translation = final_translations
             for i in range(len(subs_slice)):
                 subs_slice[i].text = translation[i]
                 self.current_subtitle += 1

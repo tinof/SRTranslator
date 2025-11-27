@@ -133,7 +133,13 @@ class DeeplTranslator(Translator):
             and original != translation
         )
 
-    def translate(self, text: str, source_language: str, destination_language: str):
+    def translate_single(
+        self,
+        text: str,
+        source_language: str,
+        destination_language: str,
+        context: str = None,
+    ):
         if source_language != self.src_lang:
             self._set_source_language(source_language)
         if destination_language != self.target_lang:
