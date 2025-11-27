@@ -1,12 +1,7 @@
 name: Windows Build
 
 on:
-  push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
+  # GUI app has been removed; keep manual trigger only.
   workflow_dispatch:
 
 env:
