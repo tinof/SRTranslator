@@ -1,12 +1,17 @@
 # SRTranslator
 
+> CLI-only subtitle translator for Linux and macOS.
+
 ## Install
 
-[PyPI](https://pypi.org/project/srtranslator/)
-
-```bash
-pip install srtranslator
-```
+- pipx (recommended for CLI use):
+  ```bash
+  pipx install srtranslator
+  ```
+- pip:
+  ```bash
+  pip install srtranslator
+  ```
 
 ## Usage in Blender
 
@@ -61,46 +66,22 @@ Quit translator
 translator.quit()
 ```
 
-## Usage from GUI
-
-Since release V0.3.9 there is a new GUI powered by flet (a python-flutter framework) on folder ./GUI
-
-![image](./GUI/assets/screen_shot.png)
-
-There is an artifact for linux and windows in the lastest github actions run.
-
-#### Package from source
-
-if you prefer to pack your own you could go to GUI folder, install the requirements and run `flet pack main.py` and copy assets folder
-
-```
-cd ./GUI
-pip install -r requirements.txt
-pip install pyinstaller
-flet pack main.py
-cp -r ./assets ./dist/assets
-```
-
-Binaries found in `dist` folder
-
-#### Alternatives
-
-[KryptoST](https://github.com/KryptoST) has made a graphical user interface. You can check it out [here](https://github.com/KryptoST/SRTranslatorGUI)
-
 ## Usage command line
+
+Supported platforms: Linux and macOS.
 
 ```bash
 # SRT file
-python -m srtranslator ./filepath/to/srt -i SRC_LANG -o DEST_LANG
+srtranslator ./filepath/to/srt -i SRC_LANG -o DEST_LANG
 
 # ASS file
-python -m srtranslator ./filepath/to/ass -i SRC_LANG -o DEST_LANG
+srtranslator ./filepath/to/ass -i SRC_LANG -o DEST_LANG
 ```
 
 ## Advanced usage
 
 ```
-usage: __main__.py [-h] [-i SRC_LANG] [-o DEST_LANG] [-v] [-vv] [-s] [-w WRAP_LIMIT] [-t {deepl-scrap,translatepy,deepl-api,pydeeplx}] [--auth AUTH] path
+usage: srtranslator [-h] [-i SRC_LANG] [-o DEST_LANG] [-v] [-vv] [-s] [-w WRAP_LIMIT] [-t {deepl-scrap,translatepy,deepl-api,pydeeplx}] [--auth AUTH] [--proxies] [--context CONTEXT] [--model-type {latency_optimized,quality_optimized,prefer_quality_optimized}] path
 
 Translate an .STR and .ASS file
 

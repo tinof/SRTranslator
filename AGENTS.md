@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SRTranslator is a Python library for translating subtitle files (.srt and .ass formats) using various translation services. It provides a CLI tool, a Python API, and a GUI application built with Flet.
+SRTranslator is a Python library for translating subtitle files (.srt and .ass formats) using various translation services. It provides a CLI tool and a Python API (GUI removed).
 
 ## Installation & Setup
 
@@ -30,48 +30,26 @@ docker run -v /path/to/subtitles:/app/subtitles srtranslator python -m srtransla
 
 ## Common Commands
 
-### CLI Usage
+### CLI Usage (Linux/macOS)
 
-**Basic translation:**
+**Basic translation (pipx/pip entrypoint):**
 ```bash
-python -m srtranslator ./path/to/file.srt -i SRC_LANG -o DEST_LANG
+srtranslator ./path/to/file.srt -i SRC_LANG -o DEST_LANG
 ```
 
 **With specific translator:**
 ```bash
-python -m srtranslator ./path/to/file.srt -i en -o es -t deepl-scrap
-python -m srtranslator ./path/to/file.srt -i en -o es -t deepl-api --auth YOUR_API_KEY
-python -m srtranslator ./path/to/file.srt -i en -o es -t translatepy
-python -m srtranslator ./path/to/file.srt -i en -o es -t pydeeplx --proxies
+srtranslator ./path/to/file.srt -i en -o es -t deepl-scrap
+srtranslator ./path/to/file.srt -i en -o es -t deepl-api --auth YOUR_API_KEY
+srtranslator ./path/to/file.srt -i en -o es -t translatepy
+srtranslator ./path/to/file.srt -i en -o es -t pydeeplx --proxies
 ```
 
 **With options:**
 ```bash
-python -m srtranslator ./file.srt -i en -o es -w 60 -v  # Custom wrap limit, verbose
-python -m srtranslator ./file.srt -i en -o es -s       # Show browser (for selenium translators)
+srtranslator ./file.srt -i en -o es -w 60 -v  # Custom wrap limit, verbose
+srtranslator ./file.srt -i en -o es -s       # Show browser (for selenium translators)
 ```
-
-### GUI Development
-
-The GUI is located in `./GUI` and built with Flet (Flutter-based framework):
-
-**Run the GUI:**
-```bash
-cd GUI
-pip install -r requirements.txt
-python main.py
-```
-
-**Package the GUI:**
-```bash
-cd GUI
-pip install -r requirements.txt
-pip install pyinstaller
-flet pack main.py
-cp -r ./assets ./dist/assets
-```
-
-Binaries will be in the `dist` folder. Note: There are also GitHub Actions workflows for Linux and Windows builds.
 
 ### Testing
 
@@ -143,9 +121,8 @@ Built-in translators:
 
 ### Entry Points
 
-- **CLI**: `srtranslator/__main__.py` - Command line interface with argparse
+- **CLI**: `srtranslator/__main__.py` exposed via `srtranslator` console script
 - **Python API**: Import `SrtFile`, `AssFile` from `srtranslator` package
-- **GUI**: `GUI/main.py` - Flet-based graphical interface
 
 ### Examples Directory
 
@@ -160,7 +137,7 @@ The `examples/` folder contains patterns for:
 
 ### Python Requirements
 
-- Python 3.6+ (specified in setup.py)
+- Python 3.8+ (CLI-only, Linux/macOS)
 - Key dependencies: deepl, selenium, srt, pyass, translatepy, PyDeepLX, free_proxy, webdriverdownloader
 
 ### Selenium/Browser Requirements
@@ -193,9 +170,4 @@ Language codes must match the translator being used:
 - PyDeepLX includes retry logic with proxy rotation
 - TimeOutException raised after 60 seconds without translation response
 
-### GUI Architecture
-
-- Built with Flet (Python Flutter framework)
-- Assets in `GUI/assets/`: language JSON files, screenshots
-- Packaged with `flet pack` + manual asset copy
-- CI/CD: GitHub Actions build workflows for Windows and Linux
+GUI components have been removed; focus on CLI and API only.
