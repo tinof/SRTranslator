@@ -35,9 +35,7 @@ class SrtFile:
             return
 
         print(f"Backup file found = {self.backup_file}")
-        with open(
-            self.backup_file, "r", encoding="utf-8", errors="ignore"
-        ) as input_file:
+        with open(self.backup_file, "r", encoding="utf-8", errors="ignore") as input_file:
             subtitles = self.load_from_file(input_file)
 
             self.start_from = len(subtitles)
@@ -142,10 +140,7 @@ class SrtFile:
         wraped_lines = []
         for word in text.split():
             # Check if inserting a word in the last sentence goes beyond the wrap limit
-            if (
-                len(wraped_lines) != 0
-                and len(wraped_lines[-1]) + len(word) < line_wrap_limit
-            ):
+            if len(wraped_lines) != 0 and len(wraped_lines[-1]) + len(word) < line_wrap_limit:
                 # If not, add it to it
                 wraped_lines[-1] += f" {word}"
                 continue
@@ -216,16 +211,14 @@ class SrtFile:
             if not line_content or line_content == "...":
                 continue
 
-            # Format: "line_num. content"
-            formatted_line = f"{i + 1}. {line_content}"
-            line_length = len(formatted_line) + 1  # +1 for newline
+            # Format: just the content
+            formatted_line = line_content
+            line_length = len(formatted_line) + 1  # +1 for space/newline
 
             if current_before_chars + line_length > max_history_chars_before:
                 break
 
-            history_before_lines.insert(
-                0, formatted_line
-            )  # Prepend to keep chronological
+            history_before_lines.insert(0, formatted_line)  # Prepend to keep chronological
             current_before_chars += line_length
 
         # Build history_after: walk forwards from chunk_end_idx + 1
@@ -237,7 +230,7 @@ class SrtFile:
             if not line_content or line_content == "...":
                 continue
 
-            formatted_line = f"{i + 1}. {line_content}"
+            formatted_line = line_content
             line_length = len(formatted_line) + 1
 
             if current_after_chars + line_length > max_history_chars_after:
@@ -246,49 +239,18 @@ class SrtFile:
             history_after_lines.append(formatted_line)
             current_after_chars += line_length
 
-        # Optional: Build scene summary for very distant history
-        scene_summary_lines = []
-        if chunk_start_idx - scene_start_idx > len(history_before_lines) + 5:
-            # There's distant history not captured in history_before
-            summary_chars = 0
-            for i in range(
-                scene_start_idx, chunk_start_idx - len(history_before_lines)
-            ):
-                line_content = self.subtitles[i].content.strip()
-                if not line_content or line_content == "...":
-                    continue
-
-                # Truncate each line for summary (first 50 chars)
-                truncated = line_content[:50] + (
-                    "..." if len(line_content) > 50 else ""
-                )
-                summary_chars += len(truncated) + 1
-
-                if summary_chars > max_summary_chars:
-                    break
-
-                scene_summary_lines.append(truncated)
-
-        # Compose final context string
+        # Compose final context string (Natural text flow)
         context_parts = []
-        context_parts.append(f"Scene {scene_index + 1}")
-
-        # Add distant summary if available
-        if scene_summary_lines:
-            context_parts.append("\nEarlier in this scene:")
-            context_parts.append("\n".join(scene_summary_lines))
 
         # Add previous dialogue
         if history_before_lines:
-            context_parts.append("\nPrevious dialogue:")
-            context_parts.append("\n".join(history_before_lines))
+            context_parts.extend(history_before_lines)
 
         # Add upcoming dialogue
         if history_after_lines:
-            context_parts.append("\nUpcoming dialogue:")
-            context_parts.append("\n".join(history_after_lines))
+            context_parts.extend(history_after_lines)
 
-        return "\n".join(context_parts) if len(context_parts) > 1 else None
+        return " ".join(context_parts) if context_parts else None
 
     def translate(
         self,
@@ -351,9 +313,7 @@ class SrtFile:
             if os.environ.get("DEBUG_CONTEXT"):
                 if current_context:
                     print(f"\n{'=' * 60}")
-                    print(
-                        f"[Chunk {chunk_num}] Lines {chunk_start_idx + 1}-{chunk_end_idx + 1}"
-                    )
+                    print(f"[Chunk {chunk_num}] Lines {chunk_start_idx + 1}-{chunk_end_idx + 1}")
                     print(f"Context:\n{current_context}")
                     print(f"{'=' * 60}")
                 else:
