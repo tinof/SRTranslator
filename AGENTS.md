@@ -10,6 +10,7 @@ This file provides guidance to AI coding assistants when working with code in th
 | `make fmt` | Format code with ruff |
 | `make check` | Run linting and type checking |
 | `make test` | Run pytest test suite |
+| `make upgrade` | Upgrade all dependencies to latest |
 | `make build` | Build package distribution |
 | `make clean` | Remove build artifacts |
 

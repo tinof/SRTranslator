@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := default
-.PHONY: default install fmt check test build clean
+.PHONY: default install fmt check test upgrade build clean
 
 default: install check test
 
@@ -20,6 +20,9 @@ test:
 
 build:
 	uv build
+
+upgrade:
+	uv sync --upgrade --all-extras
 
 clean:
 	rm -rf dist .pytest_cache .ruff_cache .venv

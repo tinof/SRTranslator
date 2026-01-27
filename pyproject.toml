@@ -37,25 +37,29 @@ dependencies = [
   "webdriverdownloader>=1.1.0.4",
 ]
 
-[project.optional-dependencies]
-dev = [
-  "pytest>=7.4",
-  "ruff>=0.9",
-  "basedpyright>=1.24",
-]
-
 [project.scripts]
 srtranslator = "srtranslator.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/sinedie/SRTranslator"
-Repository = "https://github.com/sinedie/SRTranslator"
+Homepage = "https://github.com/tinof/SRTranslator"
+Repository = "https://github.com/tinof/SRTranslator"
+
+[dependency-groups]
+dev = [
+  "pytest>=7.4",
+  "pytest-sugar>=1.0",
+  "ruff>=0.9",
+  "basedpyright>=1.24",
+]
 
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
 
 [tool.uv-dynamic-versioning]
 enable = true
+vcs = "git"
+style = "pep440"
+bump = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["srtranslator"]
@@ -65,10 +69,26 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-extend-select = ["I", "UP", "B"]
+extend-select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501", "B027"]
 
 [tool.basedpyright]
 pythonVersion = "3.12"
 include = ["srtranslator", "tests"]
-typeCheckingMode = "off"
+typeCheckingMode = "basic"
+reportAny = false
+reportMissingTypeStubs = false
+reportUnusedImport = false
+reportAttributeAccessIssue = false
+reportArgumentType = false
+reportReturnType = false
+reportAssignmentType = false
+reportOptionalMemberAccess = false
+reportCallIssue = false
+reportGeneralTypeIssues = false
+reportIndexIssue = false
+reportIncompatibleMethodOverride = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
