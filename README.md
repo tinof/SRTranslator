@@ -2,28 +2,29 @@
 
 > CLI-only subtitle translator for Linux and macOS.
 
+This is a fork of [sinedie/SRTranslator](https://github.com/sinedie/SRTranslator) with enhanced context-aware translation features and modernized build tooling.
+
 ## Install
 
-- pipx (recommended for CLI use):
-  ```bash
-  pipx install srtranslator
-  ```
-- pipx from this fork (installs directly from `tinof/SRTranslator`):
-  ```bash
-  pipx install git+https://github.com/tinof/SRTranslator.git
-  ```
-- pip:
-  ```bash
-  pip install srtranslator
-  ```
+**From this fork (recommended):**
+```bash
+# Using pipx (recommended for CLI use)
+pipx install git+https://github.com/tinof/SRTranslator.git
 
-## Usage in Blender
+# Using uv
+uv tool install git+https://github.com/tinof/SRTranslator.git
 
-[tin2tin](https://github.com/tin2tin) has made this [blender addon](https://github.com/tin2tin/import_subtitles). Check it out.
+# Using pip
+pip install git+https://github.com/tinof/SRTranslator.git
+```
+
+**From PyPI (original package):**
+```bash
+pipx install srtranslator
+# or: pip install srtranslator
+```
 
 ## Usage from script
-
-Import stuff
 
 ```python
 import os
@@ -39,7 +40,7 @@ from srtranslator.translators.translatepy import TranslatePy
 from srtranslator.translators.pydeeplx import PyDeepLX
 ```
 
-Initialize translator. It can be any translator, even your own, check the docs, there are instructions per translator and how to create your own.
+Initialize translator:
 
 ```python
 # DeepL API with quality-optimized model (recommended for complex languages like Finnish)
@@ -56,7 +57,7 @@ translator = DeeplApi(
 # translator = PyDeepLX()         # DeepLX wrapper
 ```
 
-Load, translate and save. For multiple recursive files in folder, check `examples folder`
+Load, translate and save:
 
 ```python
 filepath = "./filepath/to/srt"
@@ -86,20 +87,11 @@ if result["warnings"]:
 # Save
 sub.save(f"{os.path.splitext(filepath)[0]}_fi.srt")
 
-# Optional: Run external post-processor
-fixer_result = sub.run_external_fixer(
-    f"{os.path.splitext(filepath)[0]}_fi.srt",
-    command="fix-finnish-subs",
-)
-```
-
-Quit translator
-
-```python
+# Cleanup
 translator.quit()
 ```
 
-## Usage command line
+## Command line usage
 
 Supported platforms: Linux and macOS.
 
@@ -117,7 +109,7 @@ srtranslator ./file.srt -i en -o fi -t deepl-api --auth YOUR_KEY --model-type qu
 srtranslator ./file.srt -i en -o fi --no-external-fixer
 ```
 
-## Advanced usage
+### Full options
 
 ```
 usage: srtranslator [-h] [-i SRC_LANG] [-o DEST_LANG] [-v] [-vv] [-s] [-w WRAP_LIMIT]
@@ -135,22 +127,17 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -i SRC_LANG, --src-lang SRC_LANG
-                        Source language. Default: auto
-  -o DEST_LANG, --dest-lang DEST_LANG
-                        Destination language. Default: es (Spanish)
+  -i SRC_LANG           Source language. Default: auto
+  -o DEST_LANG          Destination language. Default: es (Spanish)
   -v, --verbose         Increase output verbosity
   -vv, --debug          Increase output verbosity for debugging
   -s, --show-browser    Show browser window (Selenium-based translators)
-  -w WRAP_LIMIT, --wrap-limit WRAP_LIMIT
-                        Number of characters to wrap a line. Default: 50
+  -w WRAP_LIMIT         Number of characters to wrap a line. Default: 50
   --use-cps             Use CPS-based line wrapping instead of fixed character limit
-  --target-cps TARGET_CPS
-                        Target characters per second for wrapping/validation. Default: 17
-  --max-lines MAX_LINES
-                        Maximum number of lines per subtitle. Default: 2
-  --validate            Run quality validation after translation (CPS, formality checks)
-  --no-formality-check  Disable formality consistency checking (Finnish sinä/te)
+  --target-cps          Target characters per second for wrapping/validation. Default: 17
+  --max-lines           Maximum number of lines per subtitle. Default: 2
+  --validate            Run quality validation after translation
+  --no-formality-check  Disable formality consistency checking
   -t, --translator      Built-in translator to use
   --auth AUTH           API key if needed by the translator
   --proxies             Use proxy by default for pydeeplx
@@ -159,27 +146,62 @@ options:
   --no-external-fixer   Disable running fix-finnish-subs after translation
 ```
 
-## Finnish Translation Features
+## Finnish translation features
 
 SRTranslator includes optimizations for translating to Finnish:
 
-### Context-Aware Translation
+### Context-aware translation
 - **Scene boundary detection**: Context is limited to within the current scene (2+ second gaps)
 - **Raw content context**: Context is built from original text, not placeholder-mutated content
 - **Chunk-aware context**: Lines within the same translation batch inform each other
 
-### Quality Validation
+### Quality validation
 - **CPS checking**: Warns when subtitles exceed target characters-per-second (default: 17)
 - **Formality detection**: Detects mixed sinä/te (informal/formal) within the same scene
 
-### DeepL API Enhancements
+### DeepL API enhancements
 - `tag_handling="xml"`: Protects markup and placeholders from corruption
 - `preserve_formatting=True`: Maintains punctuation and casing
 - `split_sentences="nonewlines"`: Prevents unwanted sentence splitting
 - `model_type="quality_optimized"`: Uses next-gen model for better morphology handling
 
-### Debug Mode
+### Debug mode
 Set `DEBUG_CONTEXT=1` to see what context is sent to DeepL:
 ```bash
 DEBUG_CONTEXT=1 srtranslator ./file.srt -i en -o fi -t deepl-api --auth KEY
 ```
+
+## Development
+
+This project uses **uv** as the package manager.
+
+```bash
+# Clone the repository
+git clone https://github.com/tinof/SRTranslator.git
+cd SRTranslator
+
+# Install dependencies
+make install
+
+# Run checks (linting + type checking)
+make check
+
+# Run tests
+make test
+
+# Format code
+make fmt
+
+# Build package
+make build
+```
+
+See [AGENTS.md](AGENTS.md) for more development details.
+
+## Blender integration
+
+[tin2tin](https://github.com/tin2tin) has made this [blender addon](https://github.com/tin2tin/import_subtitles). Check it out.
+
+## License
+
+Free for non-commercial use.

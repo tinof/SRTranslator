@@ -189,7 +189,7 @@ Upcoming dialogue:
 
 ### 1. Start with Defaults
 ```bash
-python -m srtranslator movie.srt \
+srtranslator movie.srt \
   --translator deepl-api \
   --auth "YOUR_KEY" \
   --model-type quality_optimized
@@ -202,7 +202,7 @@ python -m srtranslator movie.srt \
 
 ### 3. Enable Debug (first run)
 ```bash
-DEBUG_CONTEXT=1 python -m srtranslator ...
+DEBUG_CONTEXT=1 srtranslator ...
 ```
 
 ### 4. Review Scene Detection
@@ -212,7 +212,7 @@ DEBUG_CONTEXT=1 python -m srtranslator ...
 ### 5. Production Run
 ```bash
 # Disable debug for clean output
-python -m srtranslator file.srt \
+srtranslator file.srt \
   --translator deepl-api \
   --auth "KEY" \
   --src-lang en \

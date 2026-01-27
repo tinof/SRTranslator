@@ -173,7 +173,7 @@ Result: Proper formal Finnish legal terminology throughout scene
 Enable with `DEBUG_CONTEXT=1` to see complete context:
 
 ```bash
-DEBUG_CONTEXT=1 python -m srtranslator movie.srt \
+DEBUG_CONTEXT=1 srtranslator movie.srt \
   --translator deepl-api \
   --auth "YOUR_KEY" \
   --model-type quality_optimized
@@ -262,14 +262,14 @@ Upcoming dialogue:
 
 **Recommended command:**
 ```bash
-python -m srtranslator series_episode.srt \
+srtranslator series_episode.srt \
   --translator deepl-api \
   --auth "YOUR_KEY" \
   --src-lang en \
   --dest-lang fi \
   --context "TV drama series. Natural conversational dialogue." \
   --model-type quality_optimized
-``
+```
 
 This provides:
 1. Global style guidance (`--context`)
