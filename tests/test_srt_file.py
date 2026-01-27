@@ -1,6 +1,7 @@
-import srt
 import textwrap
 from datetime import timedelta
+
+import srt
 
 from srtranslator.srt_file import SrtFile
 

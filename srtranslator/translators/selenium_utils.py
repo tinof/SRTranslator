@@ -1,20 +1,19 @@
-import sys
 import logging
+import sys
 
-from typing import Optional, List
 from fp.fp import FreeProxy
 from selenium import webdriver
-from webdriverdownloader import GeckoDriverDownloader
-from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.proxy import Proxy, ProxyType
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver import ActionChains, Keys
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.proxy import Proxy, ProxyType
+from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from webdriverdownloader import GeckoDriverDownloader
 
 
-def create_proxy(country_id: Optional[List[str]] = ["US"]) -> Proxy:
+def create_proxy(country_id: list[str] | None = None) -> Proxy:
     """Creates a new proxy to use with a selenium driver and avoid get banned
 
     Args:
@@ -23,6 +22,8 @@ def create_proxy(country_id: Optional[List[str]] = ["US"]) -> Proxy:
     Returns:
         Proxy: Selenium WebDriver proxy
     """
+    if country_id is None:
+        country_id = ["US"]
     i = 0
     while i < 3:
         try:
@@ -45,7 +46,7 @@ def create_proxy(country_id: Optional[List[str]] = ["US"]) -> Proxy:
     raise Exception("Unable to get proxy")
 
 
-def create_driver(proxy: Optional[Proxy] = None) -> WebDriver:
+def create_driver(proxy: Proxy | None = None) -> WebDriver:
     """Creates a new Firefox selenium webdriver. Install geckodriver if not in path
 
     Args:
@@ -78,7 +79,6 @@ class BaseElement:
         wait_time: int = 100,
         optional: bool = False,
     ) -> None:
-
         self.driver = driver
         locator = (getattr(By, locate_by.upper(), "id"), locate_value)
         find_element = driver.find_elements if multiple else driver.find_element

@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
+
+[project]
+name = "srtranslator"
+description = "Translate .srt and .ass subtitle files from the CLI"
+readme = "README.md"
+license = "LicenseRef-Free"
+requires-python = ">=3.10"
+authors = [
+  { name = "EAR", email = "sinedie@protonmail.com" }
+]
+keywords = ["python", "srt", "languages", "translator", "subtitles"]
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "License :: Free for non-commercial use",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Video",
+  "Topic :: Utilities",
+]
+dynamic = ["version"]
+dependencies = [
+  "deepl>=1.25.0",
+  "free_proxy>=1.1.2",
+  "pyass>=0.1.4",
+  "translatepy>=2.3",
+  "selenium>=4.7.2",
+  "srt>=3.5.3",
+  "PyDeepLX>=1.0.7",
+  "webdriverdownloader>=1.1.0.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "ruff>=0.9",
+  "basedpyright>=1.24",
+]
+
+[project.scripts]
+srtranslator = "srtranslator.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/sinedie/SRTranslator"
+Repository = "https://github.com/sinedie/SRTranslator"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+enable = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["srtranslator"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["I", "UP", "B"]
+ignore = ["E501", "B027"]
+
+[tool.basedpyright]
+pythonVersion = "3.12"
+include = ["srtranslator", "tests"]
+typeCheckingMode = "off"

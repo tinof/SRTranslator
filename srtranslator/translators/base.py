@@ -12,12 +12,8 @@ class Translator(ABC):
         context: str = None,
     ) -> str:
         if isinstance(text, list):
-            return self.translate_batch(
-                text, source_language, destination_language, context
-            )
-        return self.translate_single(
-            text, source_language, destination_language, context
-        )
+            return self.translate_batch(text, source_language, destination_language, context)
+        return self.translate_single(text, source_language, destination_language, context)
 
     def translate_batch(
         self,
@@ -28,9 +24,7 @@ class Translator(ABC):
     ) -> list:
         # Default implementation: join and split
         joined = "\n".join(text)
-        result = self.translate_single(
-            joined, source_language, destination_language, context
-        )
+        result = self.translate_single(joined, source_language, destination_language, context)
         return result.splitlines()
 
     @abstractmethod
@@ -42,7 +36,9 @@ class Translator(ABC):
         context: str = None,
     ) -> str: ...
 
-    def quit(self): ...
+    def quit(self):
+        """Cleanup resources. Subclasses can override."""
+        pass
 
 
 class TimeOutException(Exception):

@@ -1,9 +1,9 @@
 import os
 import re
-import srt
+from collections.abc import Generator
 
+import srt
 from srt import Subtitle
-from typing import List, Generator
 
 from .translators.base import Translator
 from .util import show_progress
@@ -26,7 +26,7 @@ class SrtFile:
         self.progress_callback = progress_callback
 
         print(f"Loading {filepath} as SRT")
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as input_file:
+        with open(filepath, encoding="utf-8", errors="ignore") as input_file:
             self.subtitles = self.load_from_file(input_file)
 
         self._load_backup()
@@ -36,7 +36,7 @@ class SrtFile:
             return
 
         print(f"Backup file found = {self.backup_file}")
-        with open(self.backup_file, "r", encoding="utf-8", errors="ignore") as input_file:
+        with open(self.backup_file, encoding="utf-8", errors="ignore") as input_file:
             subtitles = self.load_from_file(input_file)
 
             self.start_from = len(subtitles)
@@ -84,7 +84,7 @@ class SrtFile:
         # Yield last chunk
         yield portion
 
-    def _clean_subs_content(self, subtitles: List[Subtitle]) -> List[Subtitle]:
+    def _clean_subs_content(self, subtitles: list[Subtitle]) -> list[Subtitle]:
         """Cleans subtitles content and delete line breaks.
         Also stores raw content before placeholder mutations for context building.
 
@@ -182,7 +182,7 @@ class SrtFile:
         # Join sentences with line break
         return "\n".join(wrapped_lines)
 
-    def _detect_scenes(self, scene_gap_seconds: float = 2.0) -> List[int]:
+    def _detect_scenes(self, scene_gap_seconds: float = 2.0) -> list[int]:
         """Detect scene boundaries based on time gaps between subtitles.
 
         Args:
@@ -416,7 +416,7 @@ class SrtFile:
         target_cps: float = 17.0,
         check_formality: bool = True,
         target_language: str = "fi",
-    ) -> List[dict]:
+    ) -> list[dict]:
         """Validate translated subtitles for quality issues.
 
         Args:
@@ -465,12 +465,14 @@ class SrtFile:
                 cps = content_length / duration
 
                 if cps > target_cps:
-                    warnings.append({
-                        "line": sub.index,
-                        "type": "cps",
-                        "severity": "warning" if cps < target_cps * 1.3 else "error",
-                        "message": f"CPS={cps:.1f} exceeds target {target_cps} (content: {content_length} chars, duration: {duration:.1f}s)",
-                    })
+                    warnings.append(
+                        {
+                            "line": sub.index,
+                            "type": "cps",
+                            "severity": "warning" if cps < target_cps * 1.3 else "error",
+                            "message": f"CPS={cps:.1f} exceeds target {target_cps} (content: {content_length} chars, duration: {duration:.1f}s)",
+                        }
+                    )
 
             # Check formality for Finnish
             if check_formality and target_language.lower() in ("fi", "fin", "finnish"):
@@ -501,14 +503,16 @@ class SrtFile:
         if check_formality and target_language.lower() in ("fi", "fin", "finnish"):
             for scene_idx, formality in scene_formality.items():
                 if formality["informal"] and formality["formal"]:
-                    informal_lines = ", ".join(str(l) for l in formality["informal"][:3])
-                    formal_lines = ", ".join(str(l) for l in formality["formal"][:3])
-                    warnings.append({
-                        "line": min(formality["informal"] + formality["formal"]),
-                        "type": "formality",
-                        "severity": "warning",
-                        "message": f"Scene {scene_idx + 1}: Mixed formality detected - informal (lines {informal_lines}...) vs formal (lines {formal_lines}...)",
-                    })
+                    informal_lines = ", ".join(str(line) for line in formality["informal"][:3])
+                    formal_lines = ", ".join(str(line) for line in formality["formal"][:3])
+                    warnings.append(
+                        {
+                            "line": min(formality["informal"] + formality["formal"]),
+                            "type": "formality",
+                            "severity": "warning",
+                            "message": f"Scene {scene_idx + 1}: Mixed formality detected - informal (lines {informal_lines}...) vs formal (lines {formal_lines}...)",
+                        }
+                    )
 
         return warnings
 
@@ -578,7 +582,6 @@ class SrtFile:
         Returns:
             dict: Results containing 'warnings' list and 'external_fixer_result' if applicable.
         """
-        import subprocess
 
         result = {
             "warnings": [],

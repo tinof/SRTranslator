@@ -1,5 +1,5 @@
-import os
 import glob
+import os
 
 from srtranslator import SrtFile
 from srtranslator.translators.deepl_api import DeeplApi

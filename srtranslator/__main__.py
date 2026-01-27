@@ -3,10 +3,8 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import subprocess
 import sys
 import traceback
-from typing import Dict, Type
 
 from .ass_file import AssFile
 from .srt_file import SrtFile
@@ -157,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-BUILTIN_TRANSLATORS: Dict[str, Type[Translator]] = {
+BUILTIN_TRANSLATORS: dict[str, type[Translator]] = {
     "deepl-scrap": DeeplTranslator,
     "deepl-api": DeeplApi,
     "translatepy": TranslatePy,
@@ -257,7 +255,9 @@ def main(argv: list[str] | None = None) -> int:
             elif "not found" in fixer_result.get("error", ""):
                 LOG.warning("fix-finnish-subs command not found. Skipping post-processing.")
             else:
-                LOG.error("fix-finnish-subs failed with exit code %d", fixer_result.get("returncode", -1))
+                LOG.error(
+                    "fix-finnish-subs failed with exit code %d", fixer_result.get("returncode", -1)
+                )
                 if fixer_result.get("stderr"):
                     LOG.error("Error output: %s", fixer_result["stderr"])
                 LOG.warning("Translation was saved but post-processing failed")

@@ -1,8 +1,8 @@
 import os
 import re
-import pyass
+from collections.abc import Generator
 
-from typing import Generator
+import pyass
 
 from .translators.base import Translator
 from .util import show_progress
@@ -25,7 +25,7 @@ class AssFile:
         self.progress_callback = progress_callback
 
         print(f"Loading {filepath} as ASS")
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as input_file:
+        with open(filepath, encoding="utf-8", errors="ignore") as input_file:
             self.subtitles = self.load_from_file(input_file)
 
         self._load_backup()
@@ -35,9 +35,7 @@ class AssFile:
             return
 
         print(f"Backup file found = {self.backup_file}")
-        with open(
-            self.backup_file, "r", encoding="utf-8", errors="ignore"
-        ) as input_file:
+        with open(self.backup_file, encoding="utf-8", errors="ignore") as input_file:
             subtitles = self.load_from_file(input_file)
 
             self.start_from = len(subtitles.events)
@@ -208,16 +206,12 @@ class AssFile:
         scene_summary_lines = []
         if chunk_start_idx - scene_start_idx > len(history_before_lines) + 5:
             summary_chars = 0
-            for i in range(
-                scene_start_idx, chunk_start_idx - len(history_before_lines)
-            ):
+            for i in range(scene_start_idx, chunk_start_idx - len(history_before_lines)):
                 line_content = self.subtitles.events[i].text.strip()
                 if not line_content or line_content == "...":
                     continue
 
-                truncated = line_content[:50] + (
-                    "..." if len(line_content) > 50 else ""
-                )
+                truncated = line_content[:50] + ("..." if len(line_content) > 50 else "")
                 summary_chars += len(truncated) + 1
 
                 if summary_chars > max_summary_chars:
@@ -303,9 +297,7 @@ class AssFile:
             if os.environ.get("DEBUG_CONTEXT"):
                 if current_context:
                     print(f"\n{'=' * 60}")
-                    print(
-                        f"[Chunk {chunk_num}] Lines {chunk_start_idx + 1}-{chunk_end_idx + 1}"
-                    )
+                    print(f"[Chunk {chunk_num}] Lines {chunk_start_idx + 1}-{chunk_end_idx + 1}")
                     print(f"Context:\n{current_context}")
                     print(f"{'=' * 60}")
                 else:
@@ -341,9 +333,7 @@ class AssFile:
                 subs_slice[i].text = translation[i]
                 self.current_subtitle += 1
 
-            self.progress_callback(
-                len(self.subtitles.events), progress=self.current_subtitle
-            )
+            self.progress_callback(len(self.subtitles.events), progress=self.current_subtitle)
 
         print("... Translation done")
 

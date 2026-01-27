@@ -1,9 +1,10 @@
-from PyDeepLX import PyDeepLX as PDLX
 from random import randint
 from time import sleep
 
-from .base import Translator as BaseTranslator
 from fp.fp import FreeProxy
+from PyDeepLX import PyDeepLX as PDLX
+
+from .base import Translator as BaseTranslator
 
 
 class PyDeepLX(BaseTranslator):
@@ -17,9 +18,7 @@ class PyDeepLX(BaseTranslator):
             print("...... Use proxy")
             self.proxies = FreeProxy(rand=True, timeout=1).get()
 
-    def translate_single(
-        self, text, source_language, destination_language, context=None
-    ):
+    def translate_single(self, text, source_language, destination_language, context=None):
         # Sleep a random number of seconds (between 5 and 10)
         # https://www.shellhacks.com/python-sleep-random-time-web-scraping/
         RANDOM_WAIT = randint(5, 10)

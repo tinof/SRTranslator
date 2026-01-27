@@ -1,9 +1,8 @@
-import os
 import glob
+import os
 
 from srtranslator import SrtFile
 from srtranslator.translators.translatepy import TranslatePy
-
 
 folder = "srt_test/"
 translator = TranslatePy()

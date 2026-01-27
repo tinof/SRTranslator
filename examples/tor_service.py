@@ -1,7 +1,8 @@
-import os
 import glob
+import os
 
 from selenium import webdriver
+
 from srtranslator import SrtFile
 from srtranslator.translators.deepl_scrap import DeeplTranslator
 

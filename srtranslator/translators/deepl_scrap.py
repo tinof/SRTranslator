@@ -1,16 +1,15 @@
-import time
 import logging
+import time
 
-from typing import Optional
-from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.remote.webdriver import WebDriver
 
-from .base import Translator, TimeOutException
+from .base import TimeOutException, Translator
 from .selenium_utils import (
-    create_proxy,
-    create_driver,
-    TextArea,
     Button,
+    TextArea,
+    create_driver,
+    create_proxy,
 )
 
 
@@ -55,7 +54,7 @@ class DeeplTranslator(Translator):
         "uk": "Ukrainian",
     }
 
-    def __init__(self, driver: Optional[WebDriver] = None):
+    def __init__(self, driver: WebDriver | None = None):
         self.last_translation_failed = False
         self.driver = driver
 
@@ -113,9 +112,7 @@ class DeeplTranslator(Translator):
         Button(self.driver, "XPATH", xpath).click()
 
         # Get the language button to click based on is dl-test property or the text in the button
-        xpath_by_property = (
-            f"//button[@data-testid='translator-lang-option-{language}']"
-        )
+        xpath_by_property = f"//button[@data-testid='translator-lang-option-{language}']"
         x_path_by_text = f"//button[text()='{self.languages[language]}']"
         xpath = f"{xpath_by_property} | {x_path_by_text}"
 
@@ -144,7 +141,7 @@ class DeeplTranslator(Translator):
 
         clean_text = text.replace("[...]", "@[.]@")
 
-        self.input_lang_from.write((clean_text.replace("\n", Keys.ENTER)))
+        self.input_lang_from.write(clean_text.replace("\n", Keys.ENTER))
 
         # Maximun number of iterations 60 seconds
         for _ in range(60):

@@ -1,9 +1,9 @@
-import os
 import glob
+import os
 
 from srtranslator import SrtFile
 from srtranslator.translators.deepl_scrap import DeeplTranslator
-from srtranslator.translators.selenium_utils import create_proxy, create_driver
+from srtranslator.translators.selenium_utils import create_driver, create_proxy
 
 folder = "srt_test/"
 for filepath in glob.glob(os.path.join(folder, "**/*.srt"), recursive=True):
