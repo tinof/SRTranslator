@@ -5,10 +5,21 @@ from .base import Translator
 class DeeplApi(Translator):
     max_char = 1500
 
-    def __init__(self, api_key, context=None, model_type=None):
+    def __init__(
+        self,
+        api_key,
+        context=None,
+        model_type=None,
+        preserve_formatting=True,
+        tag_handling="xml",
+        split_sentences="nonewlines",
+    ):
         self.translator = deepl.Translator(api_key)
         self.context = context
         self.model_type = model_type
+        self.preserve_formatting = preserve_formatting
+        self.tag_handling = tag_handling
+        self.split_sentences = split_sentences
         self.logged_model_type = False  # Only log once
 
     def translate_single(
@@ -34,6 +45,14 @@ class DeeplApi(Translator):
 
         if self.model_type:
             kwargs["model_type"] = self.model_type
+
+        # Add formatting and tag handling options
+        if self.preserve_formatting:
+            kwargs["preserve_formatting"] = self.preserve_formatting
+        if self.tag_handling:
+            kwargs["tag_handling"] = self.tag_handling
+        if self.split_sentences:
+            kwargs["split_sentences"] = self.split_sentences
 
         result = self.translator.translate_text(
             text,
@@ -70,6 +89,14 @@ class DeeplApi(Translator):
 
         if self.model_type:
             kwargs["model_type"] = self.model_type
+
+        # Add formatting and tag handling options
+        if self.preserve_formatting:
+            kwargs["preserve_formatting"] = self.preserve_formatting
+        if self.tag_handling:
+            kwargs["tag_handling"] = self.tag_handling
+        if self.split_sentences:
+            kwargs["split_sentences"] = self.split_sentences
 
         # DeepL API handles list of strings natively
         results = self.translator.translate_text(

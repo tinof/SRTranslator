@@ -20,6 +20,7 @@ class SrtFile:
         self.filepath = filepath
         self.backup_file = f"{self.filepath}.tmp"
         self.subtitles = []
+        self.raw_contents = {}  # Store original content before placeholder mutations
         self.start_from = 0
         self.current_subtitle = 0
         self.progress_callback = progress_callback
@@ -84,7 +85,8 @@ class SrtFile:
         yield portion
 
     def _clean_subs_content(self, subtitles: List[Subtitle]) -> List[Subtitle]:
-        """Cleans subtitles content and delete line breaks
+        """Cleans subtitles content and delete line breaks.
+        Also stores raw content before placeholder mutations for context building.
 
         Args:
             subtitles (List[Subtitle]): List of subtitles
@@ -102,6 +104,11 @@ class SrtFile:
             if sub.content == "":
                 sub.content = "..."
 
+            # Store raw content BEFORE placeholder mutations (for context building)
+            # Convert line breaks to spaces for clean context
+            raw_content = sub.content.replace("\n", " ").strip()
+            self.raw_contents[sub.index] = raw_content
+
             if all(sentence.startswith("-") for sentence in sub.content.split("\n")):
                 sub.content = sub.content.replace("\n", "////")
                 continue
@@ -110,46 +117,70 @@ class SrtFile:
 
         return subtitles
 
-    def wrap_lines(self, line_wrap_limit: int = 50) -> None:
+    def wrap_lines(
+        self,
+        line_wrap_limit: int = 50,
+        use_cps: bool = False,
+        target_cps: float = 17.0,
+        max_lines: int = 2,
+    ) -> None:
         """Wrap lines in all subtitles in file
 
         Args:
             line_wrap_limit (int): Number of maximum characters in a line before wrap. Defaults to 50.
+            use_cps (bool): If True, calculate wrap limit based on subtitle duration and target CPS.
+            target_cps (float): Target characters per second (default 17 for Finnish readability).
+            max_lines (int): Maximum number of lines per subtitle. Defaults to 2.
         """
         for sub in self.subtitles:
             sub.content = sub.content.replace("////", "\n")
 
+            # Calculate duration-based wrap limit if CPS mode is enabled
+            if use_cps:
+                duration = (sub.end - sub.start).total_seconds()
+                max_chars = int(duration * target_cps)
+                # Distribute across max_lines
+                effective_limit = max(20, max_chars // max_lines)
+            else:
+                effective_limit = line_wrap_limit
+
             content = []
             for line in sub.content.split("\n"):
-                if len(line) > line_wrap_limit:
-                    line = self.wrap_line(line, line_wrap_limit)
+                if len(line) > effective_limit:
+                    line = self.wrap_line(line, effective_limit, max_lines)
                 content.append(line)
 
             sub.content = "\n".join(content)
 
-    def wrap_line(self, text: str, line_wrap_limit: int = 50) -> str:
+    def wrap_line(self, text: str, line_wrap_limit: int = 50, max_lines: int = 2) -> str:
         """Wraps a line of text without breaking any word in half
 
         Args:
             text (str): Line text to wrap
             line_wrap_limit (int): Number of maximum characters in a line before wrap. Defaults to 50.
+            max_lines (int): Maximum number of lines. Defaults to 2.
 
         Returns:
-            str: Text line wraped
+            str: Text line wrapped
         """
-        wraped_lines = []
+        wrapped_lines = []
         for word in text.split():
             # Check if inserting a word in the last sentence goes beyond the wrap limit
-            if len(wraped_lines) != 0 and len(wraped_lines[-1]) + len(word) < line_wrap_limit:
+            if len(wrapped_lines) != 0 and len(wrapped_lines[-1]) + len(word) + 1 < line_wrap_limit:
                 # If not, add it to it
-                wraped_lines[-1] += f" {word}"
+                wrapped_lines[-1] += f" {word}"
+                continue
+
+            # Check if we've reached max lines and need to append to last line
+            if len(wrapped_lines) >= max_lines:
+                wrapped_lines[-1] += f" {word}"
                 continue
 
             # Insert a new sentence
-            wraped_lines.append(f"{word}")
+            wrapped_lines.append(f"{word}")
 
         # Join sentences with line break
-        return "\n".join(wraped_lines)
+        return "\n".join(wrapped_lines)
 
     def _detect_scenes(self, scene_gap_seconds: float = 2.0) -> List[int]:
         """Detect scene boundaries based on time gaps between subtitles.
@@ -187,7 +218,8 @@ class SrtFile:
     ) -> str | None:
         """Build DeepL context parameter (llm-subtrans style).
 
-        Context contains ONLY surrounding lines in source language, NOT the current chunk.
+        Context contains surrounding lines in source language using raw content
+        (without placeholder artifacts). Uses newlines for dialogue boundaries.
 
         Args:
             scene_index: Current scene number
@@ -207,13 +239,15 @@ class SrtFile:
         current_before_chars = 0
 
         for i in range(chunk_start_idx - 1, scene_start_idx - 1, -1):
-            line_content = self.subtitles[i].content.strip()
+            # Use raw content (without placeholders) for context
+            sub = self.subtitles[i]
+            line_content = self.raw_contents.get(sub.index, sub.content.strip())
             if not line_content or line_content == "...":
                 continue
 
             # Format: just the content
             formatted_line = line_content
-            line_length = len(formatted_line) + 1  # +1 for space/newline
+            line_length = len(formatted_line) + 1  # +1 for newline
 
             if current_before_chars + line_length > max_history_chars_before:
                 break
@@ -226,7 +260,9 @@ class SrtFile:
         current_after_chars = 0
 
         for i in range(chunk_end_idx + 1, scene_end_idx + 1):
-            line_content = self.subtitles[i].content.strip()
+            # Use raw content (without placeholders) for context
+            sub = self.subtitles[i]
+            line_content = self.raw_contents.get(sub.index, sub.content.strip())
             if not line_content or line_content == "...":
                 continue
 
@@ -239,7 +275,7 @@ class SrtFile:
             history_after_lines.append(formatted_line)
             current_after_chars += line_length
 
-        # Compose final context string (Natural text flow)
+        # Compose final context string using newlines for dialogue boundaries
         context_parts = []
 
         # Add previous dialogue
@@ -250,7 +286,7 @@ class SrtFile:
         if history_after_lines:
             context_parts.extend(history_after_lines)
 
-        return " ".join(context_parts) if context_parts else None
+        return "\n".join(context_parts) if context_parts else None
 
     def translate(
         self,
@@ -300,14 +336,32 @@ class SrtFile:
             # Build text array (only lines to translate)
             text = [sub.content for sub in subs_slice]
 
-            # Build DeepL context (surrounding lines, NOT current chunk)
-            current_context = self._build_deepl_context(
+            # Build DeepL context (surrounding lines)
+            surrounding_context = self._build_deepl_context(
                 scene_idx,
                 chunk_start_idx,
                 chunk_end_idx,
                 scene_start_idx,
                 scene_end_idx,
             )
+
+            # Include current chunk lines in context (addressing blind spot)
+            # This helps lines within the same chunk inform each other's translation
+            chunk_context_lines = []
+            for sub in subs_slice:
+                raw = self.raw_contents.get(sub.index, sub.content.strip())
+                if raw and raw != "...":
+                    chunk_context_lines.append(raw)
+
+            # Combine: surrounding context + current chunk content
+            context_parts = []
+            if surrounding_context:
+                context_parts.append(surrounding_context)
+            if chunk_context_lines:
+                # Add current chunk as additional context
+                context_parts.append("\n".join(chunk_context_lines))
+
+            current_context = "\n".join(context_parts) if context_parts else None
 
             # Debug output
             if os.environ.get("DEBUG_CONTEXT"):
@@ -356,3 +410,251 @@ class SrtFile:
         subtitles = srt.compose(self.subtitles)
         with open(filepath, "w", encoding="utf-8") as file_out:
             file_out.write(subtitles)
+
+    def validate(
+        self,
+        target_cps: float = 17.0,
+        check_formality: bool = True,
+        target_language: str = "fi",
+    ) -> List[dict]:
+        """Validate translated subtitles for quality issues.
+
+        Args:
+            target_cps (float): Maximum acceptable characters per second. Defaults to 17.
+            check_formality (bool): Check for mixed formality (sinä/te for Finnish). Defaults to True.
+            target_language (str): Target language code for language-specific checks. Defaults to "fi".
+
+        Returns:
+            List[dict]: List of warnings with line numbers and descriptions.
+        """
+        warnings = []
+
+        # Finnish formality patterns
+        fi_informal_patterns = [
+            r"\bsä\b",
+            r"\bsun\b",
+            r"\bsut\b",
+            r"\bsulla\b",
+            r"\bsulle\b",
+            r"\bsusta\b",
+            r"\bsinä\b",
+            r"\bsinun\b",
+            r"\bsinua\b",
+            r"\bsinulle\b",
+            r"\bsinulta\b",
+            r"\bsinusta\b",
+        ]
+        fi_formal_patterns = [
+            r"\bte\b",
+            r"\bteidän\b",
+            r"\bteitä\b",
+            r"\bteille\b",
+            r"\bteiltä\b",
+            r"\bteistä\b",
+        ]
+
+        # Track formality per scene for mixed formality detection
+        scene_starts = self._detect_scenes()
+        scene_formality = {}  # scene_idx -> {'informal': [lines], 'formal': [lines]}
+
+        for i, sub in enumerate(self.subtitles):
+            # Calculate CPS
+            duration = (sub.end - sub.start).total_seconds()
+            if duration > 0:
+                content_length = len(sub.content.replace("\n", ""))
+                cps = content_length / duration
+
+                if cps > target_cps:
+                    warnings.append({
+                        "line": sub.index,
+                        "type": "cps",
+                        "severity": "warning" if cps < target_cps * 1.3 else "error",
+                        "message": f"CPS={cps:.1f} exceeds target {target_cps} (content: {content_length} chars, duration: {duration:.1f}s)",
+                    })
+
+            # Check formality for Finnish
+            if check_formality and target_language.lower() in ("fi", "fin", "finnish"):
+                content_lower = sub.content.lower()
+
+                # Find which scene this subtitle belongs to
+                scene_idx = 0
+                for j, start_idx in enumerate(scene_starts):
+                    if i >= start_idx:
+                        scene_idx = j
+
+                if scene_idx not in scene_formality:
+                    scene_formality[scene_idx] = {"informal": [], "formal": []}
+
+                # Check for informal pronouns
+                for pattern in fi_informal_patterns:
+                    if re.search(pattern, content_lower):
+                        scene_formality[scene_idx]["informal"].append(sub.index)
+                        break
+
+                # Check for formal pronouns
+                for pattern in fi_formal_patterns:
+                    if re.search(pattern, content_lower):
+                        scene_formality[scene_idx]["formal"].append(sub.index)
+                        break
+
+        # Check for mixed formality within scenes
+        if check_formality and target_language.lower() in ("fi", "fin", "finnish"):
+            for scene_idx, formality in scene_formality.items():
+                if formality["informal"] and formality["formal"]:
+                    informal_lines = ", ".join(str(l) for l in formality["informal"][:3])
+                    formal_lines = ", ".join(str(l) for l in formality["formal"][:3])
+                    warnings.append({
+                        "line": min(formality["informal"] + formality["formal"]),
+                        "type": "formality",
+                        "severity": "warning",
+                        "message": f"Scene {scene_idx + 1}: Mixed formality detected - informal (lines {informal_lines}...) vs formal (lines {formal_lines}...)",
+                    })
+
+        return warnings
+
+    def print_warnings(
+        self,
+        target_cps: float = 17.0,
+        check_formality: bool = True,
+        target_language: str = "fi",
+    ) -> int:
+        """Validate and print warnings for quality issues.
+
+        Args:
+            target_cps (float): Maximum acceptable characters per second.
+            check_formality (bool): Check for mixed formality.
+            target_language (str): Target language code.
+
+        Returns:
+            int: Number of warnings found.
+        """
+        warnings = self.validate(target_cps, check_formality, target_language)
+
+        if not warnings:
+            print("✓ No quality issues detected")
+            return 0
+
+        print(f"\n⚠️  Found {len(warnings)} quality issue(s):\n")
+
+        for w in warnings:
+            severity_icon = "⚠️" if w["severity"] == "warning" else "❌"
+            print(f"  {severity_icon} Line {w['line']}: {w['message']}")
+
+        print()
+        return len(warnings)
+
+    def postprocess(
+        self,
+        target_language: str = "fi",
+        use_cps_wrapping: bool = True,
+        target_cps: float = 17.0,
+        line_wrap_limit: int = 50,
+        max_lines: int = 2,
+        validate_output: bool = True,
+        check_formality: bool = True,
+        run_external_fixer: bool = False,
+        external_fixer_cmd: str = "fix-finnish-subs",
+        fixer_args: list = None,
+    ) -> dict:
+        """Post-process translated subtitles with language-specific optimizations.
+
+        This is the main entry point for subtitle post-processing, combining:
+        - CPS-aware line wrapping
+        - Quality validation
+        - Optional external post-processor (e.g., fix-finnish-subs)
+
+        Args:
+            target_language (str): Target language code. Defaults to "fi".
+            use_cps_wrapping (bool): Use CPS-based line wrapping. Defaults to True.
+            target_cps (float): Target characters per second. Defaults to 17.
+            line_wrap_limit (int): Fallback wrap limit if not using CPS. Defaults to 50.
+            max_lines (int): Maximum lines per subtitle. Defaults to 2.
+            validate_output (bool): Run validation checks. Defaults to True.
+            check_formality (bool): Check for mixed formality (Finnish). Defaults to True.
+            run_external_fixer (bool): Run external post-processor. Defaults to False.
+            external_fixer_cmd (str): External command to run. Defaults to "fix-finnish-subs".
+            fixer_args (list): Additional arguments for external fixer.
+
+        Returns:
+            dict: Results containing 'warnings' list and 'external_fixer_result' if applicable.
+        """
+        import subprocess
+
+        result = {
+            "warnings": [],
+            "external_fixer_result": None,
+        }
+
+        # Apply line wrapping
+        self.wrap_lines(
+            line_wrap_limit=line_wrap_limit,
+            use_cps=use_cps_wrapping,
+            target_cps=target_cps,
+            max_lines=max_lines,
+        )
+
+        # Run validation
+        if validate_output:
+            result["warnings"] = self.validate(
+                target_cps=target_cps,
+                check_formality=check_formality,
+                target_language=target_language,
+            )
+
+        # Run external fixer if requested (requires file to be saved first)
+        if run_external_fixer:
+            result["external_fixer_result"] = {
+                "command": external_fixer_cmd,
+                "note": "Call save() first, then run external fixer on the saved file path",
+            }
+
+        return result
+
+    def run_external_fixer(
+        self,
+        filepath: str,
+        command: str = "fix-finnish-subs",
+        args: list = None,
+    ) -> dict:
+        """Run an external post-processing command on a saved subtitle file.
+
+        Args:
+            filepath (str): Path to the saved subtitle file.
+            command (str): External command to run. Defaults to "fix-finnish-subs".
+            args (list): Additional command arguments.
+
+        Returns:
+            dict: Result containing 'success', 'stdout', 'stderr', 'returncode'.
+        """
+        import subprocess
+
+        cmd = [command, filepath]
+        if args:
+            cmd.extend(args)
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return {
+                "success": True,
+                "stdout": proc.stdout,
+                "stderr": proc.stderr,
+                "returncode": proc.returncode,
+            }
+        except FileNotFoundError:
+            return {
+                "success": False,
+                "error": f"Command '{command}' not found",
+                "returncode": -1,
+            }
+        except subprocess.CalledProcessError as e:
+            return {
+                "success": False,
+                "stdout": e.stdout,
+                "stderr": e.stderr,
+                "returncode": e.returncode,
+            }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import subprocess
 import sys
 import traceback
 from typing import Dict, Type
@@ -82,6 +83,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--use-cps",
+        action="store_true",
+        help="Use CPS-based line wrapping instead of fixed character limit",
+    )
+
+    parser.add_argument(
+        "--target-cps",
+        type=float,
+        default=17.0,
+        help="Target characters per second for CPS-based wrapping and validation. Default: 17",
+    )
+
+    parser.add_argument(
+        "--max-lines",
+        type=int,
+        default=2,
+        help="Maximum number of lines per subtitle. Default: 2",
+    )
+
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Run quality validation after translation (CPS, formality checks)",
+    )
+
+    parser.add_argument(
+        "--no-formality-check",
+        action="store_true",
+        help="Disable formality consistency checking (Finnish sinä/te)",
+    )
+
+    parser.add_argument(
         "-t",
         "--translator",
         type=str,
@@ -113,6 +146,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         choices=["latency_optimized", "quality_optimized", "prefer_quality_optimized"],
         help="Model type for DeepL translation (only for deepl-api)",
+    )
+
+    parser.add_argument(
+        "--no-external-fixer",
+        action="store_true",
+        help="Disable running fix-finnish-subs after translation",
     )
 
     return parser
@@ -174,7 +213,28 @@ def main(argv: list[str] | None = None) -> int:
         sub = load_subtitle(args.filepath)
 
         sub.translate(translator, args.src_lang, args.dest_lang)
-        sub.wrap_lines(args.wrap_limit)
+
+        # Use postprocess API for SrtFile, fallback to wrap_lines for AssFile
+        if isinstance(sub, SrtFile):
+            result = sub.postprocess(
+                target_language=args.dest_lang,
+                use_cps_wrapping=args.use_cps,
+                target_cps=args.target_cps,
+                line_wrap_limit=args.wrap_limit,
+                max_lines=args.max_lines,
+                validate_output=args.validate,
+                check_formality=not args.no_formality_check,
+            )
+
+            # Print warnings if validation was requested
+            if args.validate and result["warnings"]:
+                sub.print_warnings(
+                    target_cps=args.target_cps,
+                    check_formality=not args.no_formality_check,
+                    target_language=args.dest_lang,
+                )
+        else:
+            sub.wrap_lines(args.wrap_limit)
 
         dest_path = (
             f"{os.path.splitext(args.filepath)[0]}_{args.dest_lang}"
@@ -182,6 +242,26 @@ def main(argv: list[str] | None = None) -> int:
         )
         sub.save(dest_path)
         LOG.info("Translation completed. Saved to %s", dest_path)
+
+        # Run fix-finnish-subs on the translated file (unless disabled)
+        if not args.no_external_fixer and isinstance(sub, SrtFile):
+            fixer_result = sub.run_external_fixer(
+                dest_path,
+                command="fix-finnish-subs",
+                args=["--no-ai-review"],
+            )
+            if fixer_result["success"]:
+                LOG.info("fix-finnish-subs completed successfully")
+                if fixer_result.get("stdout"):
+                    LOG.debug("fix-finnish-subs output: %s", fixer_result["stdout"])
+            elif "not found" in fixer_result.get("error", ""):
+                LOG.warning("fix-finnish-subs command not found. Skipping post-processing.")
+            else:
+                LOG.error("fix-finnish-subs failed with exit code %d", fixer_result.get("returncode", -1))
+                if fixer_result.get("stderr"):
+                    LOG.error("Error output: %s", fixer_result["stderr"])
+                LOG.warning("Translation was saved but post-processing failed")
+
         return 0
     except Exception:
         if sub:
