@@ -6,22 +6,17 @@ This is a fork of [sinedie/SRTranslator](https://github.com/sinedie/SRTranslator
 
 ## Install
 
-**From this fork (recommended):**
 ```bash
-# Using pipx (recommended for CLI use)
-pipx install git+https://github.com/tinof/SRTranslator.git
-
-# Using uv
+# Using uv (recommended)
 uv tool install git+https://github.com/tinof/SRTranslator.git
 
-# Using pip
-pip install git+https://github.com/tinof/SRTranslator.git
+# Upgrade to latest version
+uv tool upgrade srtranslator
 ```
 
-**From PyPI (original package):**
+**From PyPI (original package, not this fork):**
 ```bash
-pipx install srtranslator
-# or: pip install srtranslator
+uv tool install srtranslator
 ```
 
 ## Usage from script
