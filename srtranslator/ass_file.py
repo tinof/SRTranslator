@@ -5,7 +5,12 @@ from collections.abc import Generator
 import pyass
 
 from .translators.base import Translator
-from .util import show_progress
+from .util import clean_context_line, fit_context, show_progress
+
+# Translation engines drop a literal "\N", so it is swapped for a run of
+# backslashes that survives the round trip, padded so it never glues to a word.
+ASS_LINE_BREAK = "\\" * 4
+ASS_LINE_BREAK_PADDED = f" {ASS_LINE_BREAK} "
 
 
 class AssFile:
@@ -118,14 +123,14 @@ class AssFile:
                 sub.text = sub.text.replace("\n", "////")
                 continue
 
-            # It looks like \N is removed by the translation so we replace them by \\\\
-            sub.text = sub.text.replace(r"\N", r"\\\\")
-
-            # The \\\\ must be separated from the words to avoid weird conversions
-            sub.text = re.sub(r"[aA0-zZ9]\\\\", r" \\\\", sub.text)
-            sub.text = re.sub(r"\\\\[aA0-zZ9]", r"\\\\ ", sub.text)
+            # Swap the ASS line break for a placeholder that survives translation.
+            # Whitespace already around it is absorbed by the padding, and the
+            # neighbouring characters are left intact. A lambda replacement avoids
+            # backslash escaping in re.sub.
+            sub.text = re.sub(r"\s*\\N\s*", lambda _: ASS_LINE_BREAK_PADDED, sub.text)
 
             sub.text = sub.text.replace("\n", " ")
+            sub.text = re.sub(r" {2,}", " ", sub.text).strip()
 
         return subtitles
 
@@ -137,7 +142,10 @@ class AssFile:
         """
         for sub in self.subtitles.events:
             sub.text = sub.text.replace("////", "\n")
-            sub.text = sub.text.replace(r" \\\\ ", r"\N")
+            # Restore ASS line breaks. Translation can change the number of
+            # backslashes and the spacing around them, so accept any run of two or
+            # more. A lone backslash is left alone, it may be real dialogue.
+            sub.text = re.sub(r"\s*\\{2,}\s*", lambda _: r"\N", sub.text)
 
     def _detect_scenes(self, scene_gap_seconds: float = 2.0):
         """Detect scene boundaries based on time gaps between subtitles."""
@@ -166,12 +174,14 @@ class AssFile:
         max_summary_chars: int = 2000,
     ):
         """Build DeepL context parameter (llm-subtrans style)."""
-        # Build history_before
+        # Build history_before. Never walk below start_from: on a resumed run
+        # those entries hold already translated text, not source language.
         history_before_lines = []
         current_before_chars = 0
+        history_floor = max(scene_start_idx, self.start_from)
 
-        for i in range(chunk_start_idx - 1, scene_start_idx - 1, -1):
-            line_content = self.subtitles.events[i].text.strip()
+        for i in range(chunk_start_idx - 1, history_floor - 1, -1):
+            line_content = clean_context_line(self.subtitles.events[i].text)
             if not line_content or line_content == "...":
                 continue
 
@@ -189,7 +199,7 @@ class AssFile:
         current_after_chars = 0
 
         for i in range(chunk_end_idx + 1, scene_end_idx + 1):
-            line_content = self.subtitles.events[i].text.strip()
+            line_content = clean_context_line(self.subtitles.events[i].text)
             if not line_content or line_content == "...":
                 continue
 
@@ -204,10 +214,10 @@ class AssFile:
 
         # Build scene summary for distant history
         scene_summary_lines = []
-        if chunk_start_idx - scene_start_idx > len(history_before_lines) + 5:
+        if chunk_start_idx - history_floor > len(history_before_lines) + 5:
             summary_chars = 0
-            for i in range(scene_start_idx, chunk_start_idx - len(history_before_lines)):
-                line_content = self.subtitles.events[i].text.strip()
+            for i in range(history_floor, chunk_start_idx - len(history_before_lines)):
+                line_content = clean_context_line(self.subtitles.events[i].text)
                 if not line_content or line_content == "...":
                     continue
 
@@ -285,14 +295,30 @@ class AssFile:
             # Build text array (only lines to translate)
             text = [sub.text for sub in subs_slice]
 
-            # Build DeepL context (surrounding lines, NOT current chunk)
-            current_context = self._build_deepl_context(
+            # Build DeepL context (surrounding lines)
+            surrounding_context = self._build_deepl_context(
                 scene_idx,
                 chunk_start_idx,
                 chunk_end_idx,
                 scene_start_idx,
                 scene_end_idx,
             )
+
+            # Include the current chunk in its own context. DeepL translates
+            # each entry of a text list independently and shares only context
+            # between them, so without this a line cannot see its chunk mates.
+            chunk_context_lines = [
+                line for line in (clean_context_line(t) for t in text) if line and line != "..."
+            ]
+
+            context_parts = []
+            if surrounding_context:
+                context_parts.append(surrounding_context)
+            if chunk_context_lines:
+                context_parts.append("\n".join(chunk_context_lines))
+
+            current_context = "\n".join(context_parts) if context_parts else None
+            current_context = fit_context(current_context, text)
 
             if os.environ.get("DEBUG_CONTEXT"):
                 if current_context:

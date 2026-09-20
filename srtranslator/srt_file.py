@@ -6,7 +6,7 @@ import srt
 from srt import Subtitle
 
 from .translators.base import Translator
-from .util import show_progress
+from .util import fit_context, show_progress
 
 
 class SrtFile:
@@ -234,11 +234,14 @@ class SrtFile:
         Returns:
             str: Formatted context string for DeepL
         """
-        # Build history_before: walk backwards from chunk_start_idx - 1
+        # Build history_before: walk backwards from chunk_start_idx - 1.
+        # Never walk below start_from: on a resumed run those entries hold
+        # already translated text, not source language.
         history_before_lines = []
         current_before_chars = 0
+        history_floor = max(scene_start_idx, self.start_from)
 
-        for i in range(chunk_start_idx - 1, scene_start_idx - 1, -1):
+        for i in range(chunk_start_idx - 1, history_floor - 1, -1):
             # Use raw content (without placeholders) for context
             sub = self.subtitles[i]
             line_content = self.raw_contents.get(sub.index, sub.content.strip())
@@ -362,6 +365,7 @@ class SrtFile:
                 context_parts.append("\n".join(chunk_context_lines))
 
             current_context = "\n".join(context_parts) if context_parts else None
+            current_context = fit_context(current_context, text)
 
             # Debug output
             if os.environ.get("DEBUG_CONTEXT"):

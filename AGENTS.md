@@ -115,7 +115,13 @@ class Translator(ABC):
 
 Built-in translators:
 - `deepl_scrap.DeeplTranslator`: Web scraping via Selenium (default)
-- `deepl_api.DeeplApi`: Official DeepL API (requires key)
+- `deepl_api.DeeplApi`: Official DeepL API via `deepl.DeepLClient` (requires key)
+  - Defaults to the next-gen model (`model_type="quality_optimized"`), which has covered
+    every language pair since December 2025. `--model-type` overrides it
+  - A source language of `auto` is sent as no `source_lang` at all
+  - `custom_instructions` (CLI `--instruction`, max 10 x 300 chars) applies only to target
+    languages de/en/es/fr/it/ja/ko/zh, and DeepL rejects it with `latency_optimized`
+  - Sums `billed_characters` and logs the total plus `model_type_used` at INFO
 - `translatepy.TranslatePy`: Uses translatepy library
 - `pydeeplx.PyDeepLX`: DeepLX API wrapper with proxy support
 
@@ -126,3 +132,24 @@ Extend `srtranslator.translators.base.Translator`:
 2. Implement `translate(text, source_language, destination_language)` method
 3. Optionally implement `quit()` for cleanup
 4. See `examples/custom_translator.py` for reference
+
+## Gotchas
+
+- **DeepL translates each entry of a text list independently.** Entries share only the
+  `context` parameter, which is why each chunk is repeated inside its own context. Removing
+  that leaves every line blind to its neighbours.
+- **Context is not billed**, so budgets are generous. The hard ceiling is DeepL's 128 KiB
+  request body; `util.fit_context` trims the head of the context to stay under it.
+- **Never feed translated text back as context.** The backward walk in
+  `_build_deepl_context` stops at `self.start_from`, because a resumed run holds
+  target-language text below that index.
+- **ASS line breaks travel as a backslash placeholder.** `ass_file` swaps `\N` for
+  `ASS_LINE_BREAK_PADDED` (four backslashes, space padded) and `wrap_lines` restores any run
+  of two or more backslashes. Use a lambda replacement in `re.sub` for both, because a
+  literal replacement string re-escapes the backslashes. The older character-class version
+  ate the characters next to the placeholder and never restored `\N`.
+- **`SrtFile` and `AssFile` duplicate their chunking and context logic.** A fix applied to
+  one usually belongs in the other. `SrtFile` keeps a `raw_contents` map for clean context;
+  `AssFile` uses `util.clean_context_line` instead.
+- **`load_subtitle` tries ASS first** and falls back to SRT, so every run prints a
+  "Loading as ASS" line even for SRT. That is not an error.
