@@ -139,21 +139,47 @@ def test_context_skips_already_translated_lines_on_resume(tmp_path):
         scene_end_idx=3,
     )
 
-    assert context is None or ("First" not in context and "Second" not in context)
+    assert context is not None
+    assert "First" not in context
+    assert "Second" not in context
+    # The line after the chunk is still legitimate context
+    assert "Fourth" in context
 
 
 def test_fit_context_keeps_body_under_limit():
-    from srtranslator.util import MAX_REQUEST_BODY_BYTES, fit_context
+    import json
+
+    from srtranslator.util import (
+        MAX_REQUEST_BODY_BYTES,
+        REQUEST_OVERHEAD_BYTES,
+        fit_context,
+    )
 
     text = ["A" * 1000]
     context = "\n".join(f"line {i}" for i in range(40000))
 
     fitted = fit_context(context, text)
 
-    body = len(fitted.encode("utf-8")) + len(text[0].encode("utf-8"))
-    assert body <= MAX_REQUEST_BODY_BYTES
+    body = len(json.dumps(fitted)) + len(json.dumps(text[0]))
+    assert body <= MAX_REQUEST_BODY_BYTES - REQUEST_OVERHEAD_BYTES
     # The tail is kept, because the nearest lines matter most
     assert fitted.endswith("line 39999")
+    # Whole lines only, never a partial one
+    assert all(line.startswith("line ") for line in fitted.split("\n"))
+
+
+def test_fit_context_measures_the_escaped_wire_size():
+    """Non-ASCII is sent as \\uXXXX, so UTF-8 byte counting under-counts."""
+    from srtranslator.util import MAX_REQUEST_BODY_BYTES, fit_context
+
+    # Under UTF-8 accounting this fits; on the wire it is roughly twice as big
+    context = "\n".join("日本語" * 20 for _ in range(550))
+    assert len(context.encode("utf-8")) < MAX_REQUEST_BODY_BYTES
+
+    fitted = fit_context(context, ["x"])
+
+    assert fitted is not None
+    assert len(fitted) < len(context), "should have trimmed on wire size"
 
 
 def test_fit_context_passes_small_context_through():

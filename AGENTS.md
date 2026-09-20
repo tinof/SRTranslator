@@ -148,6 +148,13 @@ Extend `srtranslator.translators.base.Translator`:
   of two or more backslashes. Use a lambda replacement in `re.sub` for both, because a
   literal replacement string re-escapes the backslashes. The older character-class version
   ate the characters next to the placeholder and never restored `\N`.
+  The encoding must stay **above** the `-` dialogue branch: that branch `continue`s, so a
+  two-speaker line such as `-Are you sure?\N-Quite sure.` used to skip the placeholder
+  entirely. pyass never yields a real newline in event text, so the `////` substitution in
+  that branch is dead code for ASS and only the `continue` mattered.
+- **`util.fit_context` measures the wire size, not UTF-8 bytes.** The client posts JSON
+  through requests with `ensure_ascii=True`, so non-ASCII doubles in size. It is a backstop
+  that never fires under the current context budgets.
 - **`SrtFile` and `AssFile` duplicate their chunking and context logic.** A fix applied to
   one usually belongs in the other. `SrtFile` keeps a `raw_contents` map for clean context;
   `AssFile` uses `util.clean_context_line` instead.

@@ -119,14 +119,11 @@ class AssFile:
             if sub.text == "":
                 sub.text = "..."
 
-            if all(sentence.startswith("-") for sentence in sub.text.split("\n")):
-                sub.text = sub.text.replace("\n", "////")
-                continue
-
             # Swap the ASS line break for a placeholder that survives translation.
             # Whitespace already around it is absorbed by the padding, and the
             # neighbouring characters are left intact. A lambda replacement avoids
-            # backslash escaping in re.sub.
+            # backslash escaping in re.sub. This runs for every line: two-speaker
+            # lines starting with "-" used to skip it and lost their break.
             sub.text = re.sub(r"\s*\\N\s*", lambda _: ASS_LINE_BREAK_PADDED, sub.text)
 
             sub.text = sub.text.replace("\n", " ")
@@ -358,6 +355,7 @@ class AssFile:
             for i in range(len(subs_slice)):
                 subs_slice[i].text = translation[i]
                 self.current_subtitle += 1
+                current_subtitle_idx += 1
 
             self.progress_callback(len(self.subtitles.events), progress=self.current_subtitle)
 

@@ -1,3 +1,4 @@
+import json
 import re
 import sys
 
@@ -17,31 +18,54 @@ def show_progress(total: int, progress: int):
     sys.stdout.flush()
 
 
-# DeepL rejects a request body over 128 KiB. Stay clear of the edge, because a
-# chunk is measured in characters while the body is measured in bytes.
+# DeepL rejects a request body over 128 KiB. Stay clear of the edge.
 MAX_REQUEST_BODY_BYTES = 120_000
+
+# Headroom for the other fields the translator adds to the same body: the global
+# context, custom instructions, language codes and the option flags.
+REQUEST_OVERHEAD_BYTES = 8_000
+
+
+def _wire_len(value: str) -> int:
+    """Length of a string as the DeepL client actually sends it.
+
+    The client posts JSON through requests, which serialises with
+    ensure_ascii=True. Non-ASCII expands to \\uXXXX escapes and backslashes are
+    doubled, so a CJK context goes on the wire at roughly twice its UTF-8 size.
+    Measuring UTF-8 bytes here would under-count by half.
+    """
+    return len(json.dumps(value))
 
 
 def fit_context(context: str | None, text: list[str]) -> str | None:
     """Trim context so the translation request body stays under the limit.
 
-    The lines nearest the chunk carry the most meaning and are appended last, so
-    the tail is kept and the head is dropped.
+    This is a backstop. The context budgets in the subtitle classes keep the
+    string far below the limit, so under current settings it never trims. Whole
+    lines are dropped from the head, because the lines nearest the chunk carry
+    the most meaning and are appended last.
     """
     if not context:
         return context
 
-    budget = MAX_REQUEST_BODY_BYTES - sum(len(line.encode("utf-8")) for line in text)
+    budget = MAX_REQUEST_BODY_BYTES - REQUEST_OVERHEAD_BYTES
+    budget -= sum(_wire_len(line) for line in text)
     if budget <= 0:
         return None
 
-    encoded = context.encode("utf-8")
-    if len(encoded) <= budget:
-        return context
+    # Walk from the tail and keep as many whole lines as fit. Costing each line
+    # separately over-counts slightly, which is the safe direction for a backstop.
+    kept = []
+    used = 0
+    for line in reversed(context.split("\n")):
+        cost = _wire_len(line) + 1  # +1 for the newline that rejoins it
+        if used + cost > budget:
+            break
+        kept.append(line)
+        used += cost
 
-    trimmed = encoded[-budget:].decode("utf-8", errors="ignore")
-    # Drop the leading partial line left by the byte-wise cut
-    return trimmed.split("\n", 1)[-1] or None
+    kept.reverse()
+    return "\n".join(kept) or None
 
 
 def clean_context_line(text: str) -> str:

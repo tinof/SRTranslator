@@ -114,7 +114,8 @@ def test_context_skips_already_translated_lines_on_resume(tmp_path):
         scene_end_idx=2,
     )
 
-    assert context is None or ("First." not in context and "Second." not in context)
+    # With the floor there is no history left at all, and nothing after it
+    assert context is None
 
 
 def test_context_has_no_placeholder_leftovers(tmp_path):
@@ -132,3 +133,57 @@ def test_context_has_no_placeholder_leftovers(tmp_path):
     assert "\\" not in context
     assert "////" not in context
     assert "ready to sail" in context
+
+
+def test_dash_dialogue_line_break_round_trips(tmp_path):
+    r"""Two-speaker lines must get the placeholder like any other line.
+
+    The dash branch used to `continue` past the \N encoding, so the most common
+    multi-line ASS case went to the translator with a raw \N and lost its break.
+    """
+    original = r"-Are you sure?\N-Quite sure."
+    ass_file = AssFile(str(write_ass(tmp_path, original)))
+
+    encoded = texts(ass_file)[0]
+    assert r"\N" not in encoded, "dash line skipped the placeholder encoding"
+    assert "Are you sure?" in encoded
+    assert "Quite sure." in encoded
+
+    ass_file.wrap_lines()
+    assert texts(ass_file)[0] == original
+
+
+class FakeTranslator:
+    """Returns each line prefixed, preserving whatever placeholders it is given."""
+
+    max_char = 40
+
+    def __init__(self):
+        self.contexts = []
+
+    def translate(self, text, source_language, destination_language, context=None):
+        self.contexts.append(context)
+        return [f"ES:{line}" for line in text]
+
+    def quit(self):
+        pass
+
+
+def test_chunk_index_advances_across_chunks(tmp_path):
+    """The second chunk must not report the first chunk's indices."""
+    # max_char=40 forces more than one chunk
+    ass_file = AssFile(
+        str(write_ass(tmp_path, "First line here.", "Second line here.", "Third line here."))
+    )
+    translator = FakeTranslator()
+
+    ass_file.translate(translator, "en", "es")
+
+    assert len(translator.contexts) > 1, "test needs at least two chunks"
+
+    # The last chunk sits after the earlier lines, so they are its history.
+    # When the chunk index never advances, the walk starts at -1, the history is
+    # empty, and the earlier lines never appear at all.
+    last = translator.contexts[-1]
+    assert last is not None
+    assert "First line here." in last, "chunk index did not advance; history is empty"
