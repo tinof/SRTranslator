@@ -119,8 +119,11 @@ Built-in translators:
   - Defaults to the next-gen model (`model_type="quality_optimized"`), which has covered
     every language pair since December 2025. `--model-type` overrides it
   - A source language of `auto` is sent as no `source_lang` at all
-  - `custom_instructions` (CLI `--instruction`, max 10 x 300 chars) applies only to target
-    languages de/en/es/fr/it/ja/ko/zh, and DeepL rejects it with `latency_optimized`
+  - `custom_instructions` (CLI `--instruction`). Verified live: DeepL enforces at most 10
+    instructions of 300 characters each, and nothing else. It does **not** restrict them by
+    target language (Finnish and Swedish work, and the instruction is honoured) and does
+    **not** reject them with `latency_optimized`. Do not reintroduce either restriction;
+    both were copied from the docs and are wrong
   - Sums `billed_characters` and logs the total plus `model_type_used` at INFO
 - `translatepy.TranslatePy`: Uses translatepy library
 - `pydeeplx.PyDeepLX`: DeepLX API wrapper with proxy support
@@ -143,6 +146,12 @@ Extend `srtranslator.translators.base.Translator`:
 - **Never feed translated text back as context.** The backward walk in
   `_build_deepl_context` stops at `self.start_from`, because a resumed run holds
   target-language text below that index.
+- **The DeepL API does not strip `\N`.** Verified live across every parameter combination,
+  both models, and a bare request: a literal `\N` comes back intact. The comment claiming
+  otherwise, and the placeholder machinery built on it, predate the API translator and
+  presumably describe the Selenium scraper or another backend. The placeholder is kept
+  because `deepl-scrap` is still the default translator and was not retested, but do not
+  assume the premise holds for `deepl-api`.
 - **ASS line breaks travel as a backslash placeholder.** `ass_file` swaps `\N` for
   `ASS_LINE_BREAK_PADDED` (four backslashes, space padded) and `wrap_lines` restores any run
   of two or more backslashes. Use a lambda replacement in `re.sub` for both, because a

@@ -6,10 +6,10 @@ from .base import Translator
 
 LOG = logging.getLogger("srtranslator")
 
-# Target languages DeepL accepts for the custom_instructions parameter.
-# Compared against the base language code, so "en-GB" matches "en".
-CUSTOM_INSTRUCTION_LANGUAGES = frozenset({"de", "en", "es", "fr", "it", "ja", "ko", "zh"})
-
+# Verified against the live API: DeepL enforces both of these and returns a clear
+# Bad request when either is exceeded, so failing fast here saves a round trip.
+# It does NOT restrict custom_instructions by target language, and it does NOT
+# reject them with latency_optimized, so this class imposes neither.
 MAX_CUSTOM_INSTRUCTIONS = 10
 MAX_CUSTOM_INSTRUCTION_CHARS = 300
 
@@ -27,12 +27,6 @@ class DeeplApi(Translator):
         split_sentences="nonewlines",
         custom_instructions: list[str] | None = None,
     ):
-        if custom_instructions and model_type == "latency_optimized":
-            raise ValueError(
-                "DeepL rejects custom instructions together with the latency_optimized "
-                "model. Use quality_optimized, or drop the instructions."
-            )
-
         if custom_instructions:
             if len(custom_instructions) > MAX_CUSTOM_INSTRUCTIONS:
                 raise ValueError(
@@ -54,10 +48,6 @@ class DeeplApi(Translator):
         self.custom_instructions = custom_instructions
         self.billed_characters = 0
         self.logged_model_type = False  # Only log once
-        self._warned_instructions = False
-
-    def _instructions_supported(self, destination_language: str) -> bool:
-        return destination_language.split("-")[0].lower() in CUSTOM_INSTRUCTION_LANGUAGES
 
     def _request_kwargs(
         self,
@@ -89,16 +79,7 @@ class DeeplApi(Translator):
             kwargs["split_sentences"] = self.split_sentences
 
         if self.custom_instructions:
-            if self._instructions_supported(destination_language):
-                kwargs["custom_instructions"] = self.custom_instructions
-            elif not self._warned_instructions:
-                self._warned_instructions = True
-                LOG.warning(
-                    "DeepL custom instructions are not supported for target language %s. "
-                    "Continuing without them. Supported: %s.",
-                    destination_language,
-                    ", ".join(sorted(CUSTOM_INSTRUCTION_LANGUAGES)),
-                )
+            kwargs["custom_instructions"] = self.custom_instructions
 
         return kwargs
 

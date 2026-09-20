@@ -160,9 +160,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TEXT",
         help=(
             "DeepL custom instruction, repeatable (only for deepl-api). At most 10 "
-            "instructions of 300 characters each. Supported for target languages de, "
-            "en, es, fr, it, ja, ko and zh only; ignored with a warning for any other "
-            "target. Cannot be combined with --model-type latency_optimized"
+            "instructions of 300 characters each, for example "
+            "'Keep character names untranslated'"
         ),
     )
 

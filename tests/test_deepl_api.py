@@ -79,29 +79,27 @@ def test_context_omitted_when_empty(fake_client):
     assert "context" not in fake_client[0].calls[0]
 
 
-@pytest.mark.parametrize("target", ["es", "en-GB", "ZH-HANS"])
-def test_custom_instructions_forwarded_for_supported_targets(fake_client, target):
+@pytest.mark.parametrize("target", ["es", "en-GB", "ZH-HANS", "fi", "sv"])
+def test_custom_instructions_forwarded_for_every_target(fake_client, target):
+    """DeepL does not restrict instructions by target language.
+
+    Verified against the live API: Finnish and Swedish are both accepted and
+    the instruction is honoured, so this class must not invent an allowlist.
+    """
     translator = DeeplApi("key", custom_instructions=["Keep names untranslated"])
     translator.translate_single("Hello", "en", target)
 
     assert fake_client[0].calls[0]["custom_instructions"] == ["Keep names untranslated"]
 
 
-def test_custom_instructions_dropped_for_unsupported_target(fake_client, caplog):
-    translator = DeeplApi("key", custom_instructions=["Keep names untranslated"])
+def test_custom_instructions_allowed_with_latency_model(fake_client):
+    """Verified against the live API: the combination works and is honoured."""
+    translator = DeeplApi("key", model_type="latency_optimized", custom_instructions=["Keep names"])
+    translator.translate_single("Hello", "en", "es")
 
-    with caplog.at_level(logging.WARNING, logger="srtranslator"):
-        translator.translate_single("Hello", "en", "fi")
-        translator.translate_single("Again", "en", "fi")
-
-    assert "custom_instructions" not in fake_client[0].calls[0]
-    # Warned once, not per chunk
-    assert sum("custom instructions" in r.message.lower() for r in caplog.records) == 1
-
-
-def test_custom_instructions_reject_latency_model(fake_client):
-    with pytest.raises(ValueError, match="latency_optimized"):
-        DeeplApi("key", model_type="latency_optimized", custom_instructions=["x"])
+    call = fake_client[0].calls[0]
+    assert call["model_type"] == "latency_optimized"
+    assert call["custom_instructions"] == ["Keep names"]
 
 
 def test_too_many_custom_instructions_rejected(fake_client):
