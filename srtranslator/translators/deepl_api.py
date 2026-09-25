@@ -1,4 +1,6 @@
 import logging
+import re
+from xml.sax.saxutils import unescape
 
 import deepl
 
@@ -12,6 +14,25 @@ LOG = logging.getLogger("srtranslator")
 # reject them with latency_optimized, so this class imposes neither.
 MAX_CUSTOM_INSTRUCTIONS = 10
 MAX_CUSTOM_INSTRUCTION_CHARS = 300
+
+# With tag_handling="xml" DeepL parses every text AND the context as XML, and one
+# stray "&" or "<" fails the whole request ("Tag handling parsing failed"). Only
+# XML's predefined and numeric entities survive as-is: an HTML entity such as
+# &nbsp; is undefined in XML, so its "&" is escaped too and round-trips as text.
+_BARE_AMPERSAND = re.compile(r"&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)")
+# A "<" that does not open or close a tag, such as "3 < 5" or "<<".
+_BARE_LESS_THAN = re.compile(r"<(?!/?[A-Za-z][\w:.-]*(?:\s[^<>]*)?/?>)")
+_XML_UNESCAPES = {"&quot;": '"', "&apos;": "'"}
+
+
+def xml_escape_text(text: str) -> str:
+    """Escape the characters that would make subtitle text invalid XML, keeping tags."""
+    return _BARE_LESS_THAN.sub("&lt;", _BARE_AMPERSAND.sub("&amp;", text))
+
+
+def xml_unescape_text(text: str) -> str:
+    """Undo the entities DeepL returns in XML mode (it also escapes a plain ">")."""
+    return unescape(text, _XML_UNESCAPES)
 
 
 class DeeplApi(Translator):
@@ -68,7 +89,7 @@ class DeeplApi(Translator):
         # Combine global context and dynamic context
         combined_context = [c for c in (self.context, context) if c]
         if combined_context:
-            kwargs["context"] = "\n\n".join(combined_context)
+            kwargs["context"] = self._to_request_text("\n\n".join(combined_context))
 
         # Formatting and tag handling options
         if self.preserve_formatting:
@@ -82,6 +103,12 @@ class DeeplApi(Translator):
             kwargs["custom_instructions"] = self.custom_instructions
 
         return kwargs
+
+    def _to_request_text(self, text: str) -> str:
+        return xml_escape_text(text) if self.tag_handling == "xml" else text
+
+    def _from_result_text(self, text: str) -> str:
+        return xml_unescape_text(text) if self.tag_handling == "xml" else text
 
     def _record_result(self, result) -> None:
         """Accumulate billing and log the model actually used, once."""
@@ -103,11 +130,11 @@ class DeeplApi(Translator):
         context: str | None = None,
     ):
         result = self.translator.translate_text(
-            text,
+            self._to_request_text(text),
             **self._request_kwargs(source_language, destination_language, context),
         )
         self._record_result(result)
-        return result.text
+        return self._from_result_text(result.text)
 
     def translate_batch(
         self,
@@ -118,7 +145,7 @@ class DeeplApi(Translator):
     ):
         # DeepL API handles a list of strings natively
         results = self.translator.translate_text(
-            text,
+            [self._to_request_text(item) for item in text],
             **self._request_kwargs(source_language, destination_language, context),
         )
 
@@ -126,7 +153,7 @@ class DeeplApi(Translator):
             self._record_result(result)
 
         # results is a list of TextResult objects
-        return [result.text for result in results]
+        return [self._from_result_text(result.text) for result in results]
 
     def quit(self) -> None:
         if self.billed_characters:

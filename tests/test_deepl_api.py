@@ -139,3 +139,40 @@ def test_model_used_logged_once(fake_client, caplog):
 
 def test_quit_without_any_call_does_not_raise(fake_client):
     DeeplApi("key").quit()
+
+
+def test_stray_xml_characters_are_escaped_in_text_and_context(fake_client):
+    """In XML mode DeepL parses text and context; a bare "&" failed the whole request."""
+    ad = "AI translation & ad-free subs"
+    DeeplApi("key").translate_batch([ad, "3 < 5", "<i>Tom & Jerry</i>"], "nl", "fi", ad)
+
+    call = fake_client[0].calls[0]
+    assert call["text"] == [
+        "AI translation &amp; ad-free subs",
+        "3 &lt; 5",
+        "<i>Tom &amp; Jerry</i>",
+    ]
+    assert call["context"] == "AI translation &amp; ad-free subs"
+
+
+def test_existing_xml_entities_are_left_alone_but_html_ones_are_escaped(fake_client):
+    DeeplApi("key").translate_single("a &amp; b &#233; &nbsp; c", "en", "fi")
+
+    assert fake_client[0].calls[0]["text"] == "a &amp; b &#233; &amp;nbsp; c"
+
+
+def test_result_entities_are_unescaped(fake_client, monkeypatch):
+    """DeepL returns XML-escaped text, including a plain ">" as "&gt;"."""
+    monkeypatch.setattr(
+        FakeClient,
+        "translate_text",
+        lambda self, text, **kwargs: [FakeTextResult("<i>3 &lt; 5 &gt; 1</i> &amp; &quot;x&quot;")],
+    )
+
+    assert DeeplApi("key").translate_batch(["x"], "en", "fi") == ['<i>3 < 5 > 1</i> & "x"']
+
+
+def test_no_escaping_without_xml_tag_handling(fake_client):
+    DeeplApi("key", tag_handling=None).translate_single("a & b < c", "en", "fi")
+
+    assert fake_client[0].calls[0]["text"] == "a & b < c"
