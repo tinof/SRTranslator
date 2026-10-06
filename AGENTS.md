@@ -35,14 +35,43 @@ uv run ruff check
 
 SRTranslator is a Python library for translating subtitle files (.srt and .ass formats) using various translation services. It provides a CLI tool and a Python API.
 
+Two console scripts (`[project.scripts]` in `pyproject.toml`):
+
+- `srtranslator` (`__main__:main`): the general CLI.
+- `srtranslator-trans` (`trans_cli:main`): the DeepL helper with Plex-style output names
+  (`<name>.<lang>.srt`). It was the unversioned script `/home/ubuntu/bin/trans` until
+  2026-10-06. It maps `-s`/`-l` to DeepL codes, extracts subtitles from MKV files, runs
+  directories in episode order, and calls `__main__.main()` in-process with `deepl-api`,
+  `--filter-sdh --merge-fragments --wrap-limit 42` and the target's instruction preset. It
+  reads the key from `DEEPL_API_KEY` only and never puts it on a command line.
+
+### Used by the Stremio subtitles add-on
+
+The add-on (`/home/ubuntu/stremio-subtitles-add-on`) bind-mounts `/home/ubuntu/SRTranslator`
+read-only at `/opt/SRTranslator` and installs it editable on every container start, so a
+`docker restart stremio-addon` picks up a change here without an image rebuild. Its DeepL
+engine runs the command named by `TRANSLATE_BIN` as `<bin> -s <source> [-l <target>] <file>`.
+`srtranslator-trans` is the versioned replacement for the old `trans` script and is the value
+`TRANSLATE_BIN` should hold.
+
+- The add-on installs with `--no-deps --no-build-isolation`. A new runtime dependency here
+  must already be in the add-on image, or the import fails there. `chardet` and
+  `subtitle-filter` are (llm-subtrans brings them in).
+- Keep the `srtranslator-trans` interface stable. The add-on relies on `-s` and `-l`, the
+  exit status, the output name `<name>.<lang>.srt`, and a `*.proofread.json` report in the
+  output's directory (it globs for it). On failure it shows stdout and stderr to the user.
+
 ## Project Structure
 
 ```
 SRTranslator/
 ├── srtranslator/           # Main package
 │   ├── __init__.py
-│   ├── __main__.py         # CLI entry point
-│   ├── srt_file.py         # SRT subtitle handling
+│   ├── __main__.py         # CLI entry point (srtranslator)
+│   ├── trans_cli.py        # srtranslator-trans: Plex-style names, MKV extraction, batches
+│   ├── srt_file.py         # SRT subtitle handling, request planning, context, checks
+│   ├── preprocess.py       # Decoding, markup and italics, SDH filter, fragment merging
+│   ├── presets.py          # DeepL custom-instruction presets (only "fi")
 │   ├── ass_file.py         # ASS subtitle handling
 │   ├── util.py             # Utility functions
 │   ├── proofread/          # Bilingual AI proof-reading (optional extra)
@@ -101,6 +130,11 @@ uv run srtranslator ./path/to/file.srt -i en -o es
 
 # With specific translator
 uv run srtranslator ./file.srt -i en -o es -t deepl-api --auth YOUR_API_KEY
+DEEPL_API_KEY=... uv run srtranslator ./file.srt -i en -o fi -t deepl-api \
+    --filter-sdh --merge-fragments --instruction-preset fi
+
+# DeepL helper with Plex-style names (movie.en.srt -> movie.fi.srt)
+DEEPL_API_KEY=... uv run srtranslator-trans ./movie.en.srt
 uv run srtranslator ./file.srt -i en -o es -t translatepy
 uv run srtranslator ./file.srt -i en -o es -t pydeeplx --proxies
 
@@ -121,6 +155,7 @@ All translators inherit from `base.Translator`:
 ```python
 class Translator(ABC):
     max_char: int  # Maximum characters per request
+    max_items: int | None = None  # Maximum cues per request, None for no limit
 
     @abstractmethod
     def translate(text: str, source_language: str, destination_language: str) -> str
@@ -140,6 +175,13 @@ Built-in translators:
     **not** reject them with `latency_optimized`. Do not reintroduce either restriction;
     both were copied from the docs and are wrong
   - Sums `billed_characters` and logs the total plus `model_type_used` at INFO
+  - `max_char = 5000`, `max_items = 50` (DeepL's documented limit; it accepted 51 in a test)
+  - `glossary_id` (CLI `--glossary-id`) is left out of the request when the source is `auto`,
+    because DeepL needs the language pair
+  - With `tag_handling="xml"` DeepL parses every text **and the context** as XML, so
+    `xml_escape_text` escapes bare `&` and `<` before sending and `xml_unescape_text` undoes
+    the entities after. One stray `&` fails the whole request otherwise
+  - `--auth` may be omitted: `__main__` then reads `DEEPL_API_KEY`
 - `translatepy.TranslatePy`: Uses translatepy library
 - `pydeeplx.PyDeepLX`: DeepLX API wrapper with proxy support
 
@@ -152,7 +194,7 @@ whose meaning came out wrong. Install with the `proofread` extra (`google-genai`
 **Where it runs.** `__main__.main()` calls it after `sub.translate()` and before
 `postprocess()`. At that point `sub.content` is one line per cue and `sub.raw_contents` still
 holds the source text, so both languages are available and layout has not been decided yet.
-The order is: translate, proof-read, wrap, save, `fix-finnish-subs`.
+The order is: translate, proof-read, wrap, save, `fix-finnish-subs` (Finnish targets only).
 
 **How it is turned on.** Tri-state. `--proofread` forces it on and errors if it cannot run,
 `--no-proofread` forces it off, and with neither it runs when `google-genai` imports and
@@ -183,6 +225,15 @@ produces a patch that no longer matches and is rejected instead of applied.
 - **Whole-cue booleans are not enough for a multi-speaker cue.** `check_negation` compares line
   by line when the line count is unchanged. A single presence check for the cue let one
   speaker'"'"'s negation be removed while another'"'"'s kept the cue looking negative.
+- **The model never sees tags.** `document.to_display` strips them, because the guards reject
+  any correction containing markup. `ProofreadCue.italics` remembers `none`, `all` or
+  `partial`: `apply_italics` wraps a corrected `all` cue in `<i>` again, and
+  `guards.check_italics` rejects any patch to a `partial` cue (`italic_markup`), since the
+  correction cannot say which words were italic.
+- **Flagged cues reach the model as `CHECK:` lines.** `SrtFile.attention` (`empty`,
+  `untranslated`, `dialogue_lines`) is copied into `ProofreadDocument.attention` and printed
+  under the cue. That changed the transcript format, so `PROMPT_FORMAT_VERSION` is `2`. Bump
+  it again whenever the transcript changes.
 - **A dash with nothing after it is not an utterance.** `check_structure` rejects it; the line
   count and the dash both survive such a patch, so nothing else catches it.
 - **Pair mode does no wrapping afterwards.** `_render_for_file` therefore keeps whatever line
@@ -255,8 +306,34 @@ Extend `srtranslator.translators.base.Translator`:
 - **`util.fit_context` measures the wire size, not UTF-8 bytes.** The client posts JSON
   through requests with `ensure_ascii=True`, so non-ASCII doubles in size. It is a backstop
   that never fires under the current context budgets.
-- **`SrtFile` and `AssFile` duplicate their chunking and context logic.** A fix applied to
-  one usually belongs in the other. `SrtFile` keeps a `raw_contents` map for clean context;
-  `AssFile` uses `util.clean_context_line` instead.
+- **`SrtFile` and `AssFile` no longer share their chunking and context logic.** `SrtFile`
+  plans requests with `_plan_chunks` (30 s scenes, split at the longest pause) and sends plain
+  source lines before, inside and after the request as context. `AssFile` kept the older
+  scheme: 2.0 s scenes, `_get_next_chunk`, context limited to the scene with `Scene N` /
+  `Previous dialogue:` headings. Decoding, empty-cue removal, italics, `--filter-sdh`,
+  `--merge-fragments` and the post-request checks exist only in `SrtFile`. `SrtFile` keeps a
+  `raw_contents` map for clean context; `AssFile` uses `util.clean_context_line` instead.
+- **Two scene gaps, on purpose.** `srt_file.SCENE_GAP_SECONDS` (30 s) plans DeepL requests.
+  `proofread/document.SCENE_GAP_SECONDS` (2.0 s) only breaks up the reviewer's transcript.
+  Do not unify them.
+- **A backup keeps its empty cues.** `load_from_file` passes `drop_empty=False` for the `.tmp`
+  file: a backup holds one translation per source cue, and dropping an empty one would shift
+  every later cue onto the wrong source.
+- **A wrong cue count raises, it never zips.** `translate()` raises when the translator
+  returns a different number of cues than it was sent. Pairing them anyway would put every
+  later translation on the wrong cue; raising lets `main()` save the `.tmp` backup.
+- **`srtranslator-trans` deletes a leftover `.tmp` before a run.** A backup from a failed run
+  of an older pipeline (different filtering or merging) has different cue numbering, so
+  resuming from it would mispair cues.
+- **Only `deepl-api` keeps `<i>`.** `main()` sets `keep_italics` for it alone, because only
+  DeepL's XML tag handling carries tags through. `preprocess.join_italic_spans` must run
+  first: with one italic span per line, DeepL scattered the tags across the Finnish word order
+  and dropped the words between them.
+- **`--filter-sdh` does not use all of subtitle-filter.** Its font rule deleted the text
+  inside `<font>`, its speaker rule deleted any capitalised phrase before a colon
+  ("The plan is simple:"), and its greedy sound-effect rule deleted the dialogue between two
+  effects on one line. `preprocess.filter_sdh` calls the other per-cue rules itself and
+  replaces those three. Its regexes read `/` and `#` as annotation markers, so in-word slashes,
+  `#<digit>` and italic tags are swapped for private-use characters while it runs.
 - **`load_subtitle` tries ASS first** and falls back to SRT, so every run prints a
   "Loading as ASS" line even for SRT. That is not an error.

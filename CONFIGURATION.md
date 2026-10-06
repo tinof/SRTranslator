@@ -1,67 +1,82 @@
 # SRTranslator Configuration Guide
 
-## Context Window Settings
+## Context, Scenes and Requests
 
-### Default Values (Optimized for Movies/Series)
+This section describes `.srt` files (`SrtFile`). `.ass` files still use the earlier scheme,
+see [ASS files](#ass-files) below.
+
+### Default Values
 
 ```python
-# Scene detection
-scene_gap_seconds = 2.0          # Time gap to detect new scenes
+# srtranslator/srt_file.py
+SCENE_GAP_SECONDS = 30.0       # A silence this long starts a new scene
+CONTEXT_CHARS_BEFORE = 4000    # Source text before the request
+CONTEXT_CHARS_AFTER = 2000     # Source text after the request
 
-# Context history limits
-max_history_chars_before = 2000  # Previous dialogue (~15-20 subtitle lines)
-max_history_chars_after = 1000   # Upcoming dialogue (~8-10 subtitle lines)
-max_summary_chars = 2000         # Distant scene summary
-
-# Distant history trigger
-distant_history_threshold = 5    # Lines beyond history_before to trigger summary
+# srtranslator/translators/deepl_api.py (class DeeplApi)
+max_char = 5000                # Characters per request
+max_items = 50                 # Cues per request, DeepL's documented limit
 ```
+
+These are module constants and class attributes, not CLI options. `_build_deepl_context()`
+also takes `max_chars_before` and `max_chars_after` as arguments.
+
+### Scenes
+
+A gap of 30 s or more between two cues starts a new scene. A silence that long reads as a cut
+to the viewer. Scenes decide where requests begin and end. They do not limit the context.
+`validate()` uses the same scenes for its mixed sinä/te check.
+
+### Requests
+
+`_plan_chunks()` splits the untranslated cues into requests. It is ported from llm-subtrans
+`SubtitleBatcher`:
+
+1. A scene that fits in one request stays whole.
+2. A scene too large for one request is split at its longest pause, and each part again,
+   until every part fits. A request boundary therefore falls where the conversation pauses
+   most.
+3. Consecutive scenes and parts are packed into one request while the result still fits.
+
+A request fits when its text, plus one character per cue, is under `max_char` and it has no
+more than `max_items` cues. `base.Translator` sets `max_items = None`, so the other
+translators are limited by characters only.
+
+### Context
+
+DeepL translates each cue of a request on its own, so the context is the only place a cue
+can see its neighbours. Each request gets, in reading order:
+
+1. the source text before the request, up to 4000 characters
+2. the request's own lines
+3. the source text after the request, up to 2000 characters
+
+The context is one line per cue: plain source text, with no tags, line numbers or headings.
+It may cross a scene boundary, because names and topics carry over. On a resumed run, lines
+before the resume point are never used, because they hold translations, not source text. A
+global `--context` is placed before this context in the same field.
+
+Context is not billed. The hard limit is DeepL's 128 KiB request body: `util.fit_context`
+trims the start of the context to keep the request under 120,000 bytes. With the current
+budgets it never has to.
 
 ### When to Adjust
 
-#### Shorter Context (for real-time/fast translation)
-```python
-max_history_chars_before = 1000  # ~8-10 lines
-max_history_chars_after = 500    # ~4-5 lines
-max_summary_chars = 1000         # Smaller summary
-```
+- **More context**: raise `CONTEXT_CHARS_BEFORE` or `CONTEXT_CHARS_AFTER`. Context is free,
+  so the only cost is the size of the request.
+- **Request boundaries**: lower `SCENE_GAP_SECONDS` to make requests break at shorter pauses.
+  This does not change what the context contains.
+- **Larger requests**: there is nothing to gain. DeepL bills the text, not the requests, and
+  50 cues is its documented limit.
 
-#### Longer Context (for complex narratives)
-```python
-max_history_chars_before = 3000  # ~20-25 lines
-max_history_chars_after = 1500   # ~12-15 lines
-max_summary_chars = 3000         # Larger summary
-```
+### ASS files
 
-#### Disable Distant Summaries
-```python
-distant_history_threshold = 999999  # Effectively disable
-# or set max_summary_chars = 0
-```
-
-## Scene Detection Settings
-
-### Default: 2.0 seconds
-- Works well for most content
-- Captures scene changes, location shifts
-- Prevents context bleeding across cuts
-
-### Adjust for specific content:
-
-**Slow-paced dramas (more continuity):**
-```python
-scene_gap_seconds = 3.0  # Require longer gaps
-```
-
-**Fast-paced action (more breaks):**
-```python
-scene_gap_seconds = 1.5  # Shorter gaps trigger new scene
-```
-
-**Continuous dialogue (minimal breaks):**
-```python
-scene_gap_seconds = 4.0  # Only major scene changes
-```
+`AssFile` keeps the earlier scheme. Scenes start at 2.0 s gaps. Requests are filled up to
+`max_char` by `_get_next_chunk()` without regard to scenes. The context stays inside the
+current scene and is formatted as `Scene N`, `Earlier in this scene:` (lines cut to 50
+characters, up to 2000 characters), `Previous dialogue:` (up to 2000 characters) and
+`Upcoming dialogue:` (up to 1000 characters), with line numbers. A change to `SrtFile` does
+not reach `AssFile`.
 
 ## DeepL API Settings
 
@@ -83,12 +98,28 @@ scene_gap_seconds = 4.0  # Only major scene changes
 - Faster processing
 - Good for testing
 
-**Prefer quality with fallback:**
+**Legacy alias:**
 ```bash
 --model-type prefer_quality_optimized
 ```
-- Tries next-gen first
-- Falls back to classic if needed
+- Same as `quality_optimized`
+
+### API Key
+
+`deepl-api` reads `DEEPL_API_KEY` when `--auth` is omitted. This keeps the key out of the
+process list.
+
+### Custom Instructions
+
+`--instruction TEXT` adds a DeepL custom instruction and can be repeated.
+`--instruction-preset fi` adds the 8 built-in Finnish instructions from
+`srtranslator/presets.py`, placed before any `--instruction`. DeepL accepts at most 10
+instructions of 300 characters each, preset included. `fi` is the only preset.
+
+### Glossary
+
+`--glossary-id ID` applies a DeepL glossary. A glossary belongs to a language pair, so it is
+ignored when the source language is `auto`. Pass `-i` to use one.
 
 ### Global Context Examples
 
@@ -111,6 +142,43 @@ scene_gap_seconds = 4.0  # Only major scene changes
 ```bash
 --context "Historical drama set in 1920s. Formal period-appropriate language."
 ```
+
+## Input Cleaning (.srt)
+
+These steps run when the file is loaded, before any request is planned.
+
+| Step | When | What it does |
+|---|---|---|
+| Decoding | always | UTF-16 with a BOM, UTF-8 (with or without a BOM; a few broken bytes are dropped), a multi-byte encoding chardet is 90% sure of, then whichever of cp1252, cp1250 and cp1251 yields the fewest implausible characters |
+| Empty cues | always | A cue with no readable text is removed and the rest are renumbered |
+| Markup | always | Font, colour and other tags and ASS overrides are removed, their text kept. `<i>` is kept only with `deepl-api`, and adjacent italic spans are joined into one |
+| Hearing-impaired filter | `--filter-sdh` | subtitle-filter's rules for asterisks, music, credits, comma spacing and lone dashes. Its font, speaker and greedy sound-effect rules are replaced with ones that keep dialogue, and in-word slashes, `#` before a digit and italics are protected from it |
+| Fragment merging | `--merge-fragments` | Joins two cues that are halves of one sentence |
+
+The limits for fragment merging are in `srtranslator/preprocess.py`, ported from llm-subtrans:
+
+```python
+MERGE_MAX_FRAGMENT_SECONDS = 1.5  # One of the two cues must be this short
+MERGE_MAX_GAP_SECONDS = 0.3       # Gap between them
+MERGE_MAX_TOTAL_SECONDS = 6.0     # Length of the merged cue
+MERGE_MAX_CHARS = 84              # Characters in the merged cue
+MERGE_MAX_CPS = 17.0              # Reading speed of the merged cue
+```
+
+The first cue must not end a sentence, and neither cue may be dash dialogue.
+
+## Checks After Each Request (.srt)
+
+| Problem | What happens |
+|---|---|
+| Wrong number of cues in the answer | The run stops with an error. The `.tmp` backup keeps the cues translated so far |
+| Empty cue | Sent again on its own. Still empty: flagged `empty` |
+| Cue identical to the source, source has 15 or more letters | Sent again on its own. Still identical: flagged `untranslated` |
+| `////` placeholder in a cue that is not dialogue | Removed |
+| Dialogue cue with a changed number of speaker lines | Flagged `dialogue_lines` |
+| Cue faster than 25 characters per second | Counted in the log only |
+
+Flagged cues are kept in `SrtFile.attention` and shown to the proof-reader as `CHECK:` lines.
 
 ## AI Proof-Reading Settings
 
@@ -172,11 +240,15 @@ raise it rather than lowering the review's scope. `0` disables the check.
 
 ### Hardcoded (by design)
 
-- Scene detection reuses the 2.0 s gap rule, so the reviewer sees the same scenes DeepL did
+- The transcript is divided into scenes at 2.0 s gaps (`proofread/document.py`), on purpose
+  much shorter than the 30 s that `SrtFile` uses to plan DeepL requests. Here a scene is only
+  a visual break in the transcript, and a short pause already separates two exchanges
 - One call per file, unless the transcript exceeds 150,000 estimated tokens
 - Batches never split a scene; oversized scenes go out whole
 - Temperature 0.2, so two runs over the same file broadly agree
 - The guard list itself: what a correction may not change is not user-configurable
+- The model never sees markup. A fully italic cue gets its italics back after a correction;
+  a partly italic cue is never rewritten (rejection reason `italic_markup`)
 
 ### Reading the report
 
@@ -195,7 +267,8 @@ for p in d['rejected']:
 
 A run with many `stale_precondition` rejections means the model is not quoting cues accurately
 and its patches should not be trusted. Frequent `too_long` means the source is verbose and the
-cues are tight, not that the review is wrong.
+cues are tight, not that the review is wrong. `italic_markup` only means the cue was partly
+italic.
 
 ### Checking a review before applying it
 
@@ -209,40 +282,19 @@ run that follows it.
 ## Current Implementation Notes
 
 ### What's Configurable Now
-- Scene gap threshold: Change in `_detect_scenes(scene_gap_seconds=2.0)`
-- History limits: Passed to `_build_deepl_context()`
-- Global context: Via `--context` CLI argument
-- Model type: Via `--model-type` CLI argument
-- Proof-reading: Via the `--proofread-*` CLI arguments, see below
+- Scene gap and context budgets: the constants at the top of `srtranslator/srt_file.py`
+- Request size: `max_char` and `max_items` on the translator class
+- Merge limits: the `MERGE_*` constants in `srtranslator/preprocess.py`
+- Global context: via the `--context` CLI argument
+- Model type: via the `--model-type` CLI argument
+- Custom instructions: via `--instruction` and `--instruction-preset`
+- Proof-reading: via the `--proofread-*` CLI arguments, see above
 
 ### What's Hardcoded (by design)
-- Line number format: `{line_num}. {content}`
-- Context structure: `Scene N\nPrevious dialogue:\n...`
-- Truncation at 50 chars for distant summaries
-- Word-boundary aware truncation
-
-### Future Enhancement Possibilities
-
-**Cross-scene continuity (not implemented):**
-```python
-# Potential addition for multi-episode story arcs:
-def _build_episode_context():
-    """Very compressed summary of previous scenes in episode"""
-    # Would add another section:
-    # "Earlier in this episode: [compressed summaries]"
-```
-
-**Character-aware context:**
-```python
-# Extract character names and track who's speaking
-# Provide character-specific context
-```
-
-**Context bleed prevention:**
-```python
-# Add explicit prefix if needed (currently not necessary):
-context = "CONTEXT (do not translate):\n" + context
-```
+- Context format: plain source lines in reading order, no numbers or headings
+- Context stops at the resume point of a resumed run
+- A wrong cue count stops the run instead of pairing cues with the wrong text
+- Each suspect cue is retried once, alone
 
 ## Debugging
 
@@ -252,42 +304,46 @@ DEBUG_CONTEXT=1 python -m srtranslator file.srt ...
 ```
 
 ### What Debug Shows
-- Number of scenes detected
-- Line ranges for each chunk
+- Number of scenes detected and requests planned
+- Line range of each request
 - Complete context sent to DeepL
-- Scene boundaries
 
 ### Interpreting Debug Output
 ```
+Detected 14 scenes, planned 9 requests
+
 ============================================================
-[Chunk 3] Lines 15-20
+[Chunk 3] Lines 112-161
 Context:
-Scene 1
-
-Previous dialogue:
-12. Character speaks.
-13. Another line.
-
-Upcoming dialogue:
-22. Future line.
-23. More context.
+Line before the request.
+Another line before it.
+First line of the request.
+...
+Last line of the request.
+Line after the request.
 ============================================================
 ```
 
 **Check for:**
-- ✅ Context doesn't include lines 15-20 (current chunk)
-- ✅ Line numbers are sequential within scene
-- ✅ No scene boundary crossing
-- ✅ Reasonable amount of context (not too sparse/dense)
+- The request's own lines appear in the middle of the context, in order
+- No line before the resume point on a resumed run
+- Request boundaries fall at long pauses
+
+Run with `-v` to see the cues that were flagged for the proof-reader, the number of cues over
+25 characters per second, and the characters DeepL billed.
 
 ## Recommended Workflow
 
 ### 1. Start with Defaults
 ```bash
+export DEEPL_API_KEY=...
 srtranslator movie.srt \
   --translator deepl-api \
-  --auth "YOUR_KEY" \
-  --model-type quality_optimized
+  --src-lang en \
+  --dest-lang fi \
+  --filter-sdh \
+  --merge-fragments \
+  --instruction-preset fi
 ```
 
 ### 2. Add Global Context
@@ -300,21 +356,26 @@ srtranslator movie.srt \
 DEBUG_CONTEXT=1 srtranslator ...
 ```
 
-### 4. Review Scene Detection
-- Check if scenes align with actual content
-- Adjust `scene_gap_seconds` if needed
+### 4. Review the Requests
+- Check that request boundaries fall at real pauses
+- Change `SCENE_GAP_SECONDS` in `srt_file.py` only if they do not
 
 ### 5. Production Run
 ```bash
 # Disable debug for clean output
 srtranslator file.srt \
   --translator deepl-api \
-  --auth "KEY" \
   --src-lang en \
   --dest-lang fi \
+  --filter-sdh \
+  --merge-fragments \
+  --instruction-preset fi \
   --context "TV drama. Natural dialogue." \
-  --model-type quality_optimized
+  --output file.fi.srt
 ```
+
+`srtranslator-trans` runs this same pipeline with `--wrap-limit 42` and Plex-style output
+names. See the README.
 
 ## Cost Optimization
 
@@ -322,6 +383,7 @@ srtranslator file.srt \
 - Only the `text` array counts toward billing
 - Use generous context limits
 - Don't sacrifice quality to save context chars
+- A retried cue is billed again, but only that cue
 
 ### Proof-reading is not free
 - Roughly $0.03 to $0.06 per 45-minute episode on `gemini-3.8-flash`
@@ -332,18 +394,18 @@ srtranslator file.srt \
 - Rates verified September 2026 and scheduled to double on 1 January 2027
 
 ### Chunking Strategy
-- Default: 1500 chars per chunk (DeepL limit)
-- Ensures complete subtitle lines
-- Automatic batching
+- `deepl-api`: up to 5000 characters and 50 cues per request
+- Whole scenes where they fit; an oversized scene is split at its longest pause
+- Requests always hold complete subtitle cues
 
 ### API Calls
-- One call per chunk
-- Chunk size determined by `translator.max_char`
+- One call per request, plus one per retried cue
+- Request size is set by `translator.max_char` and `translator.max_items`
 - Context doesn't affect call count
 
 ---
 
-**Bottom line:** The current defaults are well-tuned for subtitle translation. Adjust
-`scene_gap_seconds` based on your content's pacing, and provide meaningful `--context` for best
-results. Leave proof-reading on its defaults unless a report tells you otherwise. Everything
-else should work optimally out of the box.
+**Bottom line:** The current defaults are well-tuned for subtitle translation. Provide
+meaningful `--context`, use `--filter-sdh` and `--merge-fragments` on hearing-impaired or
+choppy sources, and use `--instruction-preset fi` for Finnish. Leave proof-reading on its
+defaults unless a report tells you otherwise.
