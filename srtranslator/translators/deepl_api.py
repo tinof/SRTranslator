@@ -40,7 +40,7 @@ class DeeplApi(Translator):
     # only save round trips. DeepL documents a limit of 50 texts per request; it
     # accepted 51 when tested, but the documented limit is the one to rely on.
     max_char = 5000
-    max_items = 50
+    max_items: int = 50
 
     def __init__(
         self,
@@ -154,17 +154,19 @@ class DeeplApi(Translator):
         destination_language: str,
         context: str | None = None,
     ):
-        # DeepL API handles a list of strings natively
-        results = self.translator.translate_text(
-            [self._to_request_text(item) for item in text],
-            **self._request_kwargs(source_language, destination_language, context),
-        )
-
-        for result in results:
-            self._record_result(result)
-
-        # results is a list of TextResult objects
-        return [self._from_result_text(result.text) for result in results]
+        # DeepL takes a list natively, up to max_items texts per request. SrtFile
+        # plans its requests within that; any other caller (AssFile) is split here.
+        kwargs = self._request_kwargs(source_language, destination_language, context)
+        translated: list[str] = []
+        for start in range(0, len(text), self.max_items):
+            results = self.translator.translate_text(
+                [self._to_request_text(item) for item in text[start : start + self.max_items]],
+                **kwargs,
+            )
+            for result in results:
+                self._record_result(result)
+                translated.append(self._from_result_text(result.text))
+        return translated
 
     def quit(self) -> None:
         if self.billed_characters:

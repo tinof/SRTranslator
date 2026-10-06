@@ -280,8 +280,9 @@ scenes, context limited to the scene) and none of the input steps, italics handl
   text and are replaced: its font rule deleted the words inside `<font>` (now only the tag
   goes); its speaker rule deleted any capitalised phrase before a colon (now only an
   all-capitals label such as `JOHN:` or `MAN #2:` goes, never `OK:` or `TV:`, and two labelled
-  lines become dash dialogue); and its greedy sound-effect rule deleted the dialogue between
-  two effects (`[door slams] I'm here. [gunshot]` now keeps `I'm here.`). Slashes inside a word (`and/or`, `24/7`), `#` before a digit (`#1 fan`) and
+  lines become dash dialogue); and its greedy sound-effect and music rules deleted the
+  dialogue between two effects or two ♪ spans (`[door slams] I'm here. [gunshot]` now keeps
+  `I'm here.`, and `♪ song ♪ Wait! ♪ song ♪` keeps `Wait!`). Slashes inside a word (`and/or`, `24/7`), `#` before a digit (`#1 fan`) and
   italics are protected from its patterns. A cue left with no text is removed.
 - **`--merge-fragments`**: joins a sentence that the source split across two short cues, so
   DeepL translates it whole. Ported from llm-subtrans. Two cues merge only when one of them

@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from . import __main__ as srtranslator_cli
@@ -72,6 +73,21 @@ SOURCE_LANGUAGE_ALIASES = {"no": "nb", "nn": "nb", "iw": "he"}
 
 TEXT_SUBTITLE_CODECS = ("subrip", "srt", "ass", "ssa", "webvtt")
 
+#: ISO 639-2 track tags (as MKV files carry them) to DeepL source codes.
+TRACK_LANGUAGES = {
+    "eng": "en", "swe": "sv", "nor": "nb", "nob": "nb", "nno": "nb", "dan": "da",
+    "ger": "de", "deu": "de", "dut": "nl", "nld": "nl", "fre": "fr", "fra": "fr",
+    "spa": "es", "por": "pt", "ita": "it", "fin": "fi", "pol": "pl", "rus": "ru",
+    "jpn": "ja", "chi": "zh", "zho": "zh", "kor": "ko", "tur": "tr", "cze": "cs",
+    "ces": "cs", "hun": "hu", "rum": "ro", "ron": "ro", "bul": "bg", "ukr": "uk",
+    "gre": "el", "ell": "el", "est": "et", "lav": "lv", "lit": "lt", "slo": "sk",
+    "slk": "sk", "slv": "sl", "ind": "id", "ara": "ar", "heb": "he", "tha": "th",
+    "vie": "vi", "alb": "sq", "sqi": "sq",
+}  # fmt: skip
+
+#: "Show.S01E01.en.srt" -> "en": a language tag right before .srt.
+_LANG_SUFFIX_RE = re.compile(r"\.([a-z]{2,3}(?:-[a-z]{2,3})?)\.srt$", re.IGNORECASE)
+
 
 def get_language_code(lang_name: str) -> str:
     """DeepL target code for a language code or English name; exits if unknown."""
@@ -110,16 +126,29 @@ def build_plex_output_path(input_path: Path, lang_code: str) -> Path:
     return input_path.with_name(f"{base}.{lang_code.lower()}.srt")
 
 
-def extract_subtitle_from_mkv(mkv_file: Path, output_srt: Path) -> bool:
-    """Extract the best text subtitle track of an MKV, English first.
+def track_source_language(tag: str) -> str:
+    """DeepL source code for an MKV language tag, or "auto" when it is unknown."""
+    tag = (tag or "").strip().lower()
+    code = TRACK_LANGUAGES.get(tag, tag)
+    return get_source_language_code(code) if code and code != "und" else "auto"
 
-    When the file has only bitmap tracks, English text subtitles are downloaded
-    with psubs instead.
+
+def extract_subtitle_from_mkv(
+    mkv_file: Path, output_srt: Path, source_lang: str = "en"
+) -> str | None:
+    """Extract the best text subtitle track of an MKV into ``output_srt``.
+
+    A track in the requested source language comes first (English when the
+    source is auto), then any text track. When the file has only bitmap tracks,
+    English text subtitles are downloaded with psubs instead.
+
+    Returns the DeepL source code of the extracted subtitle ("auto" when its
+    track is untagged), or None when nothing could be extracted.
     """
     print("📹 MKV file detected - extracting subtitles...\n")
     if shutil.which("ffprobe") is None or shutil.which("ffmpeg") is None:
         print("❌ Error: ffmpeg and ffprobe are required for MKV subtitle extraction")
-        return False
+        return None
 
     try:
         res = subprocess.run(
@@ -131,7 +160,7 @@ def extract_subtitle_from_mkv(mkv_file: Path, output_srt: Path) -> bool:
         streams = json.loads(res.stdout).get("streams", [])
     except Exception as error:  # noqa: BLE001 - reported to the user, then skipped
         print(f"❌ Error running ffprobe: {error}")
-        return False
+        return None
 
     tracks = []
     for position, stream in enumerate(s for s in streams if s.get("codec_type") == "subtitle"):
@@ -146,25 +175,22 @@ def extract_subtitle_from_mkv(mkv_file: Path, output_srt: Path) -> bool:
         )
     if not tracks:
         print(f"❌ No subtitle tracks found in {mkv_file}")
-        return False
+        return None
 
     print("Available subtitle tracks:")
     for index, lang, title, codec in tracks:
         print(f"  Track {index}: {title} [{lang}] ({codec})")
     print()
 
-    selected = next(
-        (
-            index
-            for index, lang, _, codec in tracks
-            if lang in ("eng", "en") and codec in TEXT_SUBTITLE_CODECS
-        ),
-        None,
-    )
-    if selected is None:
-        selected = next(
-            (index for index, _, _, codec in tracks if codec in TEXT_SUBTITLE_CODECS), None
-        )
+    wanted = "en" if source_lang == "auto" else source_lang
+    text_tracks = [
+        (index, lang) for index, lang, _, codec in tracks if codec in TEXT_SUBTITLE_CODECS
+    ]
+    preferred = [
+        (index, lang) for index, lang in text_tracks if track_source_language(lang) == wanted
+    ]
+    choice = (preferred or text_tracks or [None])[0]
+    selected = choice[0] if choice else None
 
     if selected is None:
         print("⚠️  Only bitmap subtitle tracks found — downloading English text subtitles...\n")
@@ -172,14 +198,14 @@ def extract_subtitle_from_mkv(mkv_file: Path, output_srt: Path) -> bool:
             subprocess.run(["psubs", "-l", "en", str(mkv_file)], text=True, check=False)
         except FileNotFoundError:
             print("❌ psubs not found. Install it or add it to your PATH.")
-            return False
+            return None
         en_srt = mkv_file.with_name(mkv_file.stem + ".en.srt")
         if not en_srt.exists():
             print("❌ psubs did not produce an English subtitle file")
-            return False
-        if en_srt != output_srt:
-            en_srt.rename(output_srt)
-        return True
+            return None
+        # psubs' download is kept as the English sidecar; the run reads a copy.
+        shutil.copyfile(en_srt, output_srt)
+        return "en"
 
     print(f"Selected track: {selected}\nExtracting to: {output_srt}\n")
     try:
@@ -192,8 +218,11 @@ def extract_subtitle_from_mkv(mkv_file: Path, output_srt: Path) -> bool:
         )  # fmt: skip
     except subprocess.CalledProcessError as error:
         print(f"❌ Extraction failed\n{error.stderr}")
-        return False
-    return output_srt.exists()
+        return None
+    if not output_srt.exists():
+        return None
+    assert choice is not None
+    return track_source_language(choice[1])
 
 
 def build_srtranslator_argv(
@@ -226,15 +255,28 @@ def process_single_file(
     srt_file = input_file
 
     if input_file.suffix.lower() == ".mkv":
-        en_srt = input_file.with_name(input_file.stem + ".en.srt")
-        if en_srt.exists():
-            print(f"📄 Found existing English subtitle: {en_srt.name}\n")
-            srt_file = en_srt
+        sidecar_lang = "en" if source_lang == "auto" else source_lang
+        sidecar = input_file.with_name(f"{input_file.stem}.{sidecar_lang}.srt")
+        if sidecar.exists():
+            print(f"📄 Found existing subtitle: {sidecar.name}\n")
+            srt_file = sidecar
+            source_lang = sidecar_lang
         else:
-            extracted_srt = input_file.with_suffix(".srt")
-            if not extract_subtitle_from_mkv(input_file, extracted_srt):
+            # A file of our own: a subtitle already beside the MKV (movie.srt) is
+            # never overwritten or deleted.
+            handle, temp_name = tempfile.mkstemp(
+                prefix=f"{input_file.stem}.", suffix=".extracted.srt", dir=input_file.parent
+            )
+            os.close(handle)
+            extracted_srt = Path(temp_name)
+            extracted_lang = extract_subtitle_from_mkv(input_file, extracted_srt, source_lang)
+            if extracted_lang is None:
+                extracted_srt.unlink(missing_ok=True)
                 print("❌ Failed to extract subtitles from MKV")
                 return False
+            if extracted_lang != source_lang:
+                print(f"ℹ️  Extracted track is '{extracted_lang}', translating from that")
+                source_lang = extracted_lang
             srt_file = extracted_srt
 
     output_file = build_plex_output_path(input_file, target_lang)
@@ -280,7 +322,43 @@ def get_episode_sort_key(filepath: Path) -> str:
 
 
 def is_already_translated(filepath: Path) -> bool:
-    return bool(re.search(r"\.[a-z]{2}(-[a-z]{2,3})?\.srt$", filepath.name, re.IGNORECASE))
+    return bool(_LANG_SUFFIX_RE.search(filepath.name))
+
+
+def language_tag(path: Path) -> str | None:
+    """The language a file name is tagged with, as a two-letter code, or None.
+
+    "Show.S01E01.eng.srt" is English. A suffix that is not a language
+    ("tt123.src.srt") leaves the file untagged.
+    """
+    match = _LANG_SUFFIX_RE.search(path.name)
+    if not match:
+        return None
+    base = match.group(1).lower().split("-")[0]
+    code = TRACK_LANGUAGES.get(base, base)
+    code = SOURCE_LANGUAGE_ALIASES.get(code, code)
+    if code == "no":
+        code = "nb"
+    return code if code in DEEPL_SOURCE_LANGUAGES else None
+
+
+def batch_sources(files: list[Path], source_lang: str, target_lang: str) -> list[Path]:
+    """The subtitles in a folder that are translation sources.
+
+    An untagged file is a source, and so is one tagged with the source
+    language (Show.S01E01.en.srt for -s en). A file in the target language, or in
+    any other language when the source is fixed, is not. Two sources that would
+    write the same output keep only the first, untagged before tagged.
+    """
+    target = target_lang.lower().split("-")[0]
+    chosen: dict[Path, Path] = {}
+    for path in sorted(files, key=lambda f: (language_tag(f) is not None, f.name)):
+        tag = language_tag(path)
+        if tag == target or (tag and source_lang != "auto" and tag != source_lang):
+            continue
+        output = build_plex_output_path(path, target_lang)
+        chosen.setdefault(output, path)
+    return sorted(chosen.values(), key=get_episode_sort_key)
 
 
 def batch_process(files: list[Path], debug_mode: bool, target_lang: str, source_lang: str) -> int:
@@ -342,9 +420,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if process_single_file(input_path, args.debug, target_lang, source_lang) else 1
 
     cwd = Path.cwd()
-    sources = sorted(
-        (f for f in cwd.glob("*.srt") if not is_already_translated(f)), key=get_episode_sort_key
-    )
+    sources = batch_sources(list(cwd.glob("*.srt")), source_lang, target_lang)
     if not sources:
         sources = sorted(cwd.glob("*.mkv"), key=get_episode_sort_key)
     if not sources:

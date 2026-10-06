@@ -109,3 +109,23 @@ def test_flagged_cues_get_a_check_line(in_flight):
     transcript = build_transcript(document_from_srt_file(in_flight, "en", "fi"))
     assert "CHECK: the translation is identical to the original" in transcript
     assert transcript.count("CHECK:") == 1
+
+
+def test_pair_mode_reads_legacy_encodings_and_any_italic_spelling(tmp_path, write_srt):
+    source = write_srt(tmp_path / "en.srt", SOURCE)
+    translated = tmp_path / "fi.srt"
+    translated.write_bytes(
+        TRANSLATED.replace("<i>", "<I>").replace("</i>", "</I >").encode("cp1252")
+    )
+    backend = FakeBackend(
+        [patch(1, "Näin hänen lähtevän penkiltä.", "Näin hänen lähtevän pankista.")]
+    )
+
+    proofread_pair(
+        source, str(translated), backend, ProofreadOptions(report_path=str(tmp_path / "r.json")),
+        "en", "fi",
+    )  # fmt: skip
+
+    written = translated.read_text(encoding="utf-8")
+    assert "<i>Näin hänen lähtevän pankista.</i>" in written
+    assert "Hän sanoi <i>ei</i>." in written

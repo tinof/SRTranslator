@@ -238,6 +238,19 @@ _EFFECT_RES = (
 )
 
 
+_MUSIC_SPAN_RE = re.compile(r"♪[^♪]*♪")
+
+
+def remove_music(text: str) -> str:
+    """Remove sung lines and ♪ spans, keeping speech between two of them.
+
+    subtitle-filter's greedy ♪(.*)♪ deleted "Wait!" from "♪ song ♪ Wait! ♪ song ♪".
+    A line still holding a lone ♪ or a bare # (after _protect) is a lyric line.
+    """
+    text = _MUSIC_SPAN_RE.sub("", text)
+    return "\n".join(line for line in text.split("\n") if "♪" not in line and "#" not in line)
+
+
 def remove_sound_effects(text: str) -> str:
     """Remove bracketed and starred annotations, keeping the dialogue around them.
 
@@ -297,7 +310,7 @@ def filter_sdh(subtitles: list[Subtitle]) -> list[Subtitle]:
         text = clean_markup(subtitle.content, keep_italics=True)
         text = remove_speaker_labels(text)
 
-        protected = remove_sound_effects(_protect(text))
+        protected = remove_music(remove_sound_effects(_protect(text)))
         if not "".join(protected.split()):
             continue
 
@@ -305,8 +318,6 @@ def filter_sdh(subtitles: list[Subtitle]) -> list[Subtitle]:
         cue.index = subtitle.index or 1
         cue.contents = protected
         cue.remove_asterisks()
-        if cue.index:
-            cue.remove_music()
         if cue.index:
             cue.remove_author()
         if cue.index:

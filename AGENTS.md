@@ -331,9 +331,9 @@ Extend `srtranslator.translators.base.Translator`:
   and dropped the words between them.
 - **`--filter-sdh` does not use all of subtitle-filter.** Its font rule deleted the text
   inside `<font>`, its speaker rule deleted any capitalised phrase before a colon
-  ("The plan is simple:"), and its greedy sound-effect rule deleted the dialogue between two
-  effects on one line. `preprocess.filter_sdh` calls the other per-cue rules itself and
-  replaces those three. Its regexes read `/` and `#` as annotation markers, so in-word slashes,
+  ("The plan is simple:"), and its greedy sound-effect and music rules deleted the dialogue
+  between two effects or two ♪ spans. `preprocess.filter_sdh` calls the other per-cue rules
+  itself and replaces those four. Its regexes read `/` and `#` as annotation markers, so in-word slashes,
   `#<digit>` and italic tags are swapped for private-use characters while it runs.
 - **`load_subtitle` tries ASS first** and falls back to SRT, so every run prints a
   "Loading as ASS" line even for SRT. That is not an error.

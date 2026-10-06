@@ -247,3 +247,26 @@ def test_guards_run_against_the_text_that_will_be_written():
     decision = decide(document, [patch])
 
     assert decision.accepted[0].after == "-Oletko?\n-Aivan."
+
+
+def test_negation_guard_is_finnish_only():
+    from datetime import timedelta
+
+    from srtranslator.proofread.apply import decide
+    from srtranslator.proofread.document import ProofreadCue, ProofreadDocument
+    from srtranslator.proofread.models import Patch
+
+    def document(target_lang):
+        cue = ProofreadCue(
+            id=1, start=timedelta(0), end=timedelta(seconds=3),
+            source="I'm going home.", target="Estoy en casa.", is_dialogue=False,
+        )  # fmt: skip
+        return ProofreadDocument(cues=[cue], scene_starts=[0], source_lang="en",
+                                 target_lang=target_lang)  # fmt: skip
+
+    patch = Patch(
+        id=1, before="Estoy en casa.", after="Voy a casa.", category="wrong_sense",
+        severity="major", source_evidence="going home", reason="movement",
+    )  # fmt: skip
+
+    assert [p.id for p in decide(document("es"), [patch]).accepted] == [1]

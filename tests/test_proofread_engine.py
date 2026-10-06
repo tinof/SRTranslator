@@ -424,3 +424,25 @@ def test_an_en_dash_dialogue_correction_keeps_its_line_break(tmp_path, write_srt
     assert sub.subtitles[0].content == "–Oletko varma?////–Aivan."
     sub.wrap_lines(line_wrap_limit=42)
     assert sub.subtitles[0].content == "–Oletko varma?\n–Aivan."
+
+
+def test_a_report_path_may_not_be_a_link_to_a_subtitle(source_path, translated_path, tmp_path):
+    import os
+
+    # In pipeline mode the protected subtitle is the input file being translated.
+    symlink = tmp_path / "report-link.json"
+    os.symlink(source_path, symlink)
+    hardlink = tmp_path / "report-hard.json"
+    os.link(source_path, hardlink)
+
+    for path in (symlink, hardlink):
+        sub = translated_srt_file(source_path, translated_path)
+        with pytest.raises(ProofreadError, match="would overwrite"):
+            proofread_srt_file(
+                sub,
+                FakeBackend([BANK_PATCH]),
+                ProofreadOptions(report_path=str(path)),
+                "en",
+                "fi",
+                report_for=translated_path,
+            )
