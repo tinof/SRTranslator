@@ -37,6 +37,14 @@ dependencies = [
   "webdriverdownloader>=1.1.0.4",
 ]
 
+[project.optional-dependencies]
+# Bilingual AI proof-reading. 1.61 is the version verified to carry
+# ThinkingConfig.thinking_level, which the Gemini 3 models require.
+proofread = [
+  "google-genai>=1.61",
+  "pydantic>=2.9",
+]
+
 [project.scripts]
 srtranslator = "srtranslator.__main__:main"
 
@@ -50,6 +58,8 @@ dev = [
   "pytest-sugar>=1.0",
   "ruff>=0.9",
   "basedpyright>=1.24",
+  "google-genai>=1.61",
+  "pydantic>=2.9",
 ]
 
 [tool.hatch.version]

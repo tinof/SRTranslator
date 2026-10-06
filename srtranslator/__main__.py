@@ -7,6 +7,9 @@ import sys
 import traceback
 
 from .ass_file import AssFile
+from .proofread import ProofreadOptions, proofread_pair, proofread_srt_file
+from .proofread.backends import gemini as gemini_backend
+from .proofread.models import ProofreadError
 from .srt_file import SrtFile
 from .translators.base import Translator
 from .translators.deepl_api import DeeplApi
@@ -171,6 +174,120 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable running fix-finnish-subs after translation",
     )
 
+    proofread = parser.add_argument_group(
+        "AI proof-reading",
+        "Review the finished translation against the original with a Gemini model, and "
+        "correct only cues whose meaning came out wrong. Runs automatically when "
+        "google-genai is installed and Gemini credentials are set.",
+    )
+
+    proofread.add_argument(
+        "--proofread",
+        dest="proofread",
+        action="store_true",
+        default=None,
+        help="Force proof-reading on, and fail loudly if it cannot run",
+    )
+
+    proofread.add_argument(
+        "--no-proofread",
+        dest="proofread",
+        action="store_false",
+        help="Skip proof-reading even when credentials are available",
+    )
+
+    proofread.add_argument(
+        "--proofread-only",
+        action="store_true",
+        help=(
+            "Proof-read an already translated file instead of translating. The "
+            "positional path is the translated subtitle, --source is the original. "
+            "The file is edited in place and the previous version is kept as .bak"
+        ),
+    )
+
+    proofread.add_argument(
+        "--source",
+        type=str,
+        metavar="PATH",
+        help="Original subtitle file, required by --proofread-only",
+    )
+
+    proofread.add_argument(
+        "--proofread-model",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help=(
+            "Reviewing model. Default: $SRTRANSLATOR_PROOFREAD_MODEL or "
+            f"{gemini_backend.DEFAULT_MODEL}"
+        ),
+    )
+
+    proofread.add_argument(
+        "--proofread-thinking",
+        type=str,
+        choices=["low", "medium", "high"],
+        default=None,
+        help="Reasoning level of the reviewing model. Default: $GEMINI_THINKING_LEVEL or medium",
+    )
+
+    proofread.add_argument(
+        "--proofread-min-severity",
+        type=str,
+        choices=["minor", "major", "critical"],
+        default="minor",
+        help="Ignore corrections below this severity. Default: minor",
+    )
+
+    proofread.add_argument(
+        "--proofread-max-change",
+        type=float,
+        default=0.30,
+        metavar="FRACTION",
+        help=(
+            "Refuse the whole review if it wants to change more than this share of "
+            "the cues. Default: 0.30"
+        ),
+    )
+
+    proofread.add_argument(
+        "--proofread-max-cost",
+        type=float,
+        default=0.50,
+        metavar="USD",
+        help="Skip the review if it is estimated to cost more than this. 0 disables. Default: 0.50",
+    )
+
+    proofread.add_argument(
+        "--proofread-report",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Where to write the review report. Default: <output>.proofread.json",
+    )
+
+    proofread.add_argument(
+        "--proofread-dry-run",
+        action="store_true",
+        help="Review and write the report, but do not change the subtitles",
+    )
+
+    proofread.add_argument(
+        "--proofread-backend",
+        type=str,
+        choices=["gemini", "fake"],
+        default="gemini",
+        help=argparse.SUPPRESS,
+    )
+
+    proofread.add_argument(
+        "--proofread-fake-patches",
+        type=str,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+
     return parser
 
 
@@ -201,6 +318,138 @@ def load_subtitle(filepath: str):
         return SrtFile(filepath)
 
 
+def proofread_enabled(args: argparse.Namespace) -> bool:
+    """Whether to review this run.
+
+    Explicit flags win. With neither, the stage turns itself on only when it can
+    actually run, so an install without the extra behaves exactly as before.
+    """
+    if args.proofread is not None:
+        return bool(args.proofread)
+    if args.proofread_backend == "fake":
+        return False
+    return gemini_backend.sdk_available() and gemini_backend.credentials_available()
+
+
+def build_proofread_options(args: argparse.Namespace, report_for: str) -> ProofreadOptions:
+    return ProofreadOptions(
+        model=args.proofread_model or gemini_backend.default_model(),
+        thinking_level=args.proofread_thinking or gemini_backend.default_thinking_level(),
+        min_severity=args.proofread_min_severity,
+        max_change_fraction=args.proofread_max_change,
+        target_cps=args.target_cps,
+        max_cost_usd=args.proofread_max_cost,
+        dry_run=args.proofread_dry_run,
+        report_path=args.proofread_report,
+        wrap_limit=args.wrap_limit,
+        max_lines=args.max_lines,
+    )
+
+
+def build_proofread_backend(args: argparse.Namespace, options: ProofreadOptions):
+    """The reviewing model, or None when the run may proceed without one."""
+    if args.proofread_backend == "fake":
+        from .proofread.backends.fake import FakeBackend
+
+        if args.proofread_fake_patches:
+            return FakeBackend.from_file(args.proofread_fake_patches)
+        return FakeBackend([])
+
+    try:
+        return gemini_backend.GeminiBackend.from_env(
+            model=options.model, thinking_level=options.thinking_level
+        )
+    except ProofreadError as error:
+        if args.proofread:
+            raise
+        LOG.warning("Skipping proof-reading: %s", error)
+        return None
+
+
+def run_pipeline_proofread(args: argparse.Namespace, sub: SrtFile, dest_path: str) -> None:
+    """Review the translation in place, never letting a failure lose it.
+
+    The translation has already been paid for by the time this runs, and an
+    exception escaping here would reach main()'s handler, which truncates the file
+    to a .tmp backup. Everything is caught, including the filesystem and SDK errors
+    that are not ProofreadError: a report that cannot be written, or a client that
+    cannot authenticate, must not cost the user their translation.
+    """
+    options = build_proofread_options(args, dest_path)
+    try:
+        backend = build_proofread_backend(args, options)
+    except Exception as error:  # noqa: BLE001 - see the docstring
+        LOG.error("Proof-reading unavailable: %s", error)
+        return
+    if backend is None:
+        return
+
+    try:
+        result = proofread_srt_file(
+            sub, backend, options, args.src_lang, args.dest_lang, report_for=dest_path
+        )
+    except Exception as error:  # noqa: BLE001 - see the docstring
+        LOG.error("Proof-reading failed: %s", error)
+        LOG.debug(traceback.format_exc())
+        return
+
+    print(result.summary())
+    if result.report_path:
+        LOG.info("Proof-reading report: %s", result.report_path)
+
+
+def run_proofread_only(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Review an already translated file against its original."""
+    if not args.source:
+        parser.error("--proofread-only needs --source pointing at the original subtitle")
+    if not os.path.exists(args.source):
+        parser.error(f"Source file not found: {args.source}")
+    if not os.path.exists(args.filepath):
+        parser.error(f"Translated file not found: {args.filepath}")
+
+    options = build_proofread_options(args, args.filepath)
+    try:
+        backend = build_proofread_backend(args, options)
+    except Exception as error:  # noqa: BLE001 - a CLI reports, it does not traceback
+        LOG.error("%s", error)
+        return 1
+    if backend is None:
+        LOG.error("Proof-reading is not available in this environment")
+        return 1
+
+    try:
+        result = proofread_pair(
+            args.source,
+            args.filepath,
+            backend,
+            options,
+            args.src_lang,
+            args.dest_lang,
+        )
+    except ProofreadError as error:
+        # Ordinary user errors, including ProofreadAlignmentError when the two
+        # files do not describe the same cues.
+        LOG.error("%s", error)
+        return 1
+    except OSError as error:
+        LOG.error("Could not read or write a subtitle file: %s", error)
+        return 1
+    except Exception as error:  # noqa: BLE001 - a CLI reports, it does not traceback
+        LOG.error("Proof-reading failed: %s", error)
+        LOG.debug(traceback.format_exc())
+        return 1
+
+    print(result.summary())
+    if result.report_path:
+        print(f"Report: {result.report_path}")
+    if result.status == "applied" and result.applied:
+        print(
+            "Mechanical fixes were not re-run. If this file has not been through "
+            "fix-finnish-subs yet, run it once now."
+        )
+    return 0 if result.status in ("applied", "dry_run") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -210,6 +459,14 @@ def main(argv: list[str] | None = None) -> int:
 
     configure_logging(args.loglevel)
     configure_headless(args.show_browser)
+
+    if args.proofread_only:
+        # Before the translator is constructed: this path never translates, and
+        # deepl-api would demand an API key it is not going to use.
+        return run_proofread_only(args, parser)
+
+    if args.source:
+        parser.error("--source is only used with --proofread-only")
 
     translator_args = {}
     if args.auth:
@@ -239,6 +496,20 @@ def main(argv: list[str] | None = None) -> int:
 
         sub.translate(translator, args.src_lang, args.dest_lang)
 
+        dest_path = (
+            f"{os.path.splitext(args.filepath)[0]}_{args.dest_lang}"
+            f"{os.path.splitext(args.filepath)[1]}"
+        )
+
+        # Proof-read before wrapping: the cue text is still one line per cue and
+        # the source text is still available, so meaning is corrected first and
+        # layout is decided afterwards from the final text.
+        if proofread_enabled(args):
+            if isinstance(sub, SrtFile):
+                run_pipeline_proofread(args, sub, dest_path)
+            else:
+                LOG.warning("Proof-reading supports .srt files only, skipping")
+
         # Use postprocess API for SrtFile, fallback to wrap_lines for AssFile
         if isinstance(sub, SrtFile):
             result = sub.postprocess(
@@ -261,10 +532,6 @@ def main(argv: list[str] | None = None) -> int:
         else:
             sub.wrap_lines(args.wrap_limit)
 
-        dest_path = (
-            f"{os.path.splitext(args.filepath)[0]}_{args.dest_lang}"
-            f"{os.path.splitext(args.filepath)[1]}"
-        )
         sub.save(dest_path)
         LOG.info("Translation completed. Saved to %s", dest_path)
 

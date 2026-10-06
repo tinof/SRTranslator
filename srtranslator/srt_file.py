@@ -36,9 +36,17 @@ class SrtFile:
             return
 
         print(f"Backup file found = {self.backup_file}")
+
+        # load_from_file() runs _clean_subs_content(), which rewrites
+        # self.raw_contents. The backup holds already translated text, so letting
+        # it through would replace the source text of every resumed subtitle with
+        # its own translation. Keep the source copy taken from the input file.
+        source_contents = dict(self.raw_contents)
+
         with open(self.backup_file, encoding="utf-8", errors="ignore") as input_file:
             subtitles = self.load_from_file(input_file)
 
+            self.raw_contents = source_contents
             self.start_from = len(subtitles)
             self.current_subtitle = self.start_from
             print(f"Starting from subtitle {self.start_from}")
@@ -152,8 +160,12 @@ class SrtFile:
 
             sub.content = "\n".join(content)
 
-    def wrap_line(self, text: str, line_wrap_limit: int = 50, max_lines: int = 2) -> str:
+    @staticmethod
+    def wrap_line(text: str, line_wrap_limit: int = 50, max_lines: int = 2) -> str:
         """Wraps a line of text without breaking any word in half
+
+        Static so the proof-reading stage can re-wrap a single corrected cue
+        without holding an SrtFile.
 
         Args:
             text (str): Line text to wrap
