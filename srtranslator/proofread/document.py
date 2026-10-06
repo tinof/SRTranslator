@@ -8,13 +8,14 @@ identity (the SRT index) so patches map back by id, never by position.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 
 import srt
 from srt import Subtitle
 
-from ..preprocess import strip_tags
+from ..preprocess import decode_subtitle_bytes, strip_tags
 from .models import ProofreadError
 
 # Scenes for the reviewer's transcript. Deliberately much shorter than the 30 s
@@ -186,8 +187,22 @@ def document_from_srt_file(sub, source_lang: str, target_lang: str) -> Proofread
 
 
 def _parse_srt(path: str) -> list[Subtitle]:
-    with open(path, encoding="utf-8", errors="ignore") as handle:
-        return list(srt.sort_and_reindex(list(srt.parse(handle))))
+    # Decoded like SrtFile does: errors="ignore" dropped the accented letters of a
+    # cp1252 file, and a rewrite after one accepted correction lost them everywhere.
+    with open(path, "rb") as handle:
+        text = decode_subtitle_bytes(handle.read())
+    subtitles = list(srt.sort_and_reindex(list(srt.parse(text))))
+    for subtitle in subtitles:
+        subtitle.content = normalize_italic_tags(subtitle.content)
+    return subtitles
+
+
+_ITALIC_TAG_RE = re.compile(r"<\s*(/?)\s*i\s*>", re.IGNORECASE)
+
+
+def normalize_italic_tags(content: str) -> str:
+    """Spell italic tags as <i> and </i>, so <I> or <i > count as italics too."""
+    return _ITALIC_TAG_RE.sub(lambda match: f"<{match.group(1)}i>", content)
 
 
 #: A translated file may have been re-synced against the video, which shifts every

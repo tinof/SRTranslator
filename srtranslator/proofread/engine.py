@@ -298,6 +298,16 @@ def _build_report(
     )
 
 
+def _same_file(path: str, candidate: str) -> bool:
+    """True when both names reach one file, through symlinks or hard links too."""
+    if os.path.realpath(candidate) == path:
+        return True
+    try:
+        return os.path.samefile(path, candidate)
+    except OSError:
+        return False  # one of them does not exist, so writing cannot destroy it
+
+
 def _report_path(options: ProofreadOptions, default_for: str, *protected: str) -> str:
     """Where the report goes, refusing any path that would destroy a subtitle.
 
@@ -307,9 +317,9 @@ def _report_path(options: ProofreadOptions, default_for: str, *protected: str) -
     """
     path = options.report_path or f"{default_for}.proofread.json"
 
-    resolved = os.path.abspath(path)
+    resolved = os.path.realpath(path)
     for candidate in protected:
-        if candidate and os.path.abspath(candidate) == resolved:
+        if candidate and _same_file(resolved, candidate):
             raise ProofreadError(
                 f"--proofread-report would overwrite {os.path.basename(candidate)}. "
                 "Choose a path that is not one of the subtitle files."

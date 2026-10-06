@@ -191,3 +191,9 @@ def test_capitalised_words_that_are_not_speakers_stay():
 
 def test_text_between_angle_brackets_is_not_a_tag():
     assert preprocess.strip_tags("a < b and c > d") == "a < b and c > d"
+
+
+def test_speech_between_two_music_spans_survives():
+    assert filtered("♪ song ♪ Wait! ♪ song ♪") == ["Wait!"]
+    assert filtered("♪ la la la") == []
+    assert filtered("I'm your #1 fan") == ["I'm your #1 fan"]

@@ -424,7 +424,7 @@ def build_proofread_backend(args: argparse.Namespace, options: ProofreadOptions)
         return None
 
 
-def run_pipeline_proofread(args: argparse.Namespace, sub: SrtFile, dest_path: str) -> None:
+def run_pipeline_proofread(args: argparse.Namespace, sub: SrtFile, dest_path: str) -> bool:
     """Review the translation in place, never letting a failure lose it.
 
     The translation has already been paid for by the time this runs, and an
@@ -432,15 +432,18 @@ def run_pipeline_proofread(args: argparse.Namespace, sub: SrtFile, dest_path: st
     to a .tmp backup. Everything is caught, including the filesystem and SDK errors
     that are not ProofreadError: a report that cannot be written, or a client that
     cannot authenticate, must not cost the user their translation.
+
+    Returns False when the review could not run or ended in an error, so main()
+    can exit non-zero for an explicit --proofread after saving the translation.
     """
     options = build_proofread_options(args, dest_path)
     try:
         backend = build_proofread_backend(args, options)
     except Exception as error:  # noqa: BLE001 - see the docstring
         LOG.error("Proof-reading unavailable: %s", error)
-        return
+        return False
     if backend is None:
-        return
+        return False
 
     try:
         result = proofread_srt_file(
@@ -449,11 +452,12 @@ def run_pipeline_proofread(args: argparse.Namespace, sub: SrtFile, dest_path: st
     except Exception as error:  # noqa: BLE001 - see the docstring
         LOG.error("Proof-reading failed: %s", error)
         LOG.debug(traceback.format_exc())
-        return
+        return False
 
     print(result.summary())
     if result.report_path:
         LOG.info("Proof-reading report: %s", result.report_path)
+    return result.status != "error"
 
 
 def run_proofread_only(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
@@ -584,9 +588,10 @@ def main(argv: list[str] | None = None) -> int:
         # Proof-read before wrapping: the cue text is still one line per cue and
         # the source text is still available, so meaning is corrected first and
         # layout is decided afterwards from the final text.
+        proofread_ok = True
         if proofread_enabled(args):
             if isinstance(sub, SrtFile):
-                run_pipeline_proofread(args, sub, dest_path)
+                proofread_ok = run_pipeline_proofread(args, sub, dest_path)
             else:
                 LOG.warning("Proof-reading supports .srt files only, skipping")
 
@@ -637,6 +642,10 @@ def main(argv: list[str] | None = None) -> int:
                     LOG.error("Error output: %s", fixer_result["stderr"])
                 LOG.warning("Translation was saved but post-processing failed")
 
+        if args.proofread and not proofread_ok:
+            # Saved, but the review that was explicitly required did not happen.
+            LOG.error("Proof-reading was required (--proofread) but did not complete")
+            return 3
         return 0
     except Exception:
         if sub:

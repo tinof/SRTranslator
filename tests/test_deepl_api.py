@@ -176,3 +176,13 @@ def test_no_escaping_without_xml_tag_handling(fake_client):
     DeeplApi("key", tag_handling=None).translate_single("a & b < c", "en", "fi")
 
     assert fake_client[0].calls[0]["text"] == "a & b < c"
+
+
+def test_an_oversized_batch_is_split_into_requests_of_max_items(fake_client):
+    translator = DeeplApi("key")
+    texts = [f"line {i}" for i in range(120)]
+
+    result = translator.translate_batch(texts, "en", "fi")
+
+    assert result == [f"translated line {i}" for i in range(120)]
+    assert [len(call["text"]) for call in fake_client[0].calls] == [50, 50, 20]

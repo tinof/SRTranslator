@@ -64,6 +64,9 @@ def decide(
     """Run every guard over every patch and report what survives."""
     decision = ApplyDecision()
     by_id = document.by_id()
+    # The negation vocabulary is Finnish; in another language "en" or "et" are
+    # ordinary words and would reject valid corrections.
+    finnish = (document.target_lang or "").strip().lower().split("-")[0] in ("fi", "fin")
 
     for raw in _dedupe(patches, decision.rejected):
         # Guard and apply the same string. Tidying after validation would mean the
@@ -82,7 +85,7 @@ def decide(
             or guards.check_italics(cue)
             or guards.check_structure(patch, cue)
             or guards.check_numbers(patch)
-            or guards.check_negation(patch)
+            or (guards.check_negation(patch) if finnish else None)
             or guards.check_length(patch, cue, max_growth, target_cps)
             or guards.check_sanity(patch)
         )

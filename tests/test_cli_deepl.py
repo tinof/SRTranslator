@@ -190,3 +190,101 @@ def test_regional_finnish_runs_the_fixer():
 def test_regional_target_file_name_is_lower_case(tmp_path):
     out = trans_cli.build_plex_output_path(tmp_path / "tt1.src.srt", "pt-PT")
     assert out.name == "tt1.pt-pt.srt"
+
+
+# --- Codex review regressions -------------------------------------------------
+
+
+def _fake_pipeline(monkeypatch, seen):
+    def fake_main(argv):
+        seen.append(argv)
+        out = argv[argv.index("--output") + 1]
+        open(out, "w", encoding="utf-8").write(SOURCE)
+        return 0
+
+    monkeypatch.setattr(trans_cli.srtranslator_cli, "main", fake_main)
+
+
+def test_mkv_extraction_never_touches_an_existing_srt(tmp_path, monkeypatch):
+    mkv = tmp_path / "movie.mkv"
+    mkv.write_bytes(b"")
+    existing = tmp_path / "movie.srt"
+    existing.write_text("keep me", encoding="utf-8")
+    monkeypatch.setenv("DEEPL_API_KEY", "k")
+    seen = []
+    _fake_pipeline(monkeypatch, seen)
+
+    def fake_extract(mkv_file, output_srt, source_lang="en"):
+        assert output_srt != existing
+        output_srt.write_text(SOURCE, encoding="utf-8")
+        return "en"
+
+    monkeypatch.setattr(trans_cli, "extract_subtitle_from_mkv", fake_extract)
+
+    assert trans_cli.main([str(mkv)]) == 0
+    assert existing.read_text(encoding="utf-8") == "keep me"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["movie.fi.srt", "movie.mkv", "movie.srt"]
+
+
+def test_mkv_uses_the_source_language_sidecar(tmp_path, monkeypatch):
+    mkv = tmp_path / "movie.mkv"
+    mkv.write_bytes(b"")
+    (tmp_path / "movie.en.srt").write_text(SOURCE, encoding="utf-8")
+    (tmp_path / "movie.sv.srt").write_text(SOURCE, encoding="utf-8")
+    monkeypatch.setenv("DEEPL_API_KEY", "k")
+    seen = []
+    _fake_pipeline(monkeypatch, seen)
+
+    assert trans_cli.main(["-s", "sv", str(mkv)]) == 0
+    argv = seen[0]
+    assert argv[0] == str(tmp_path / "movie.sv.srt")
+    assert argv[argv.index("--src-lang") + 1] == "sv"
+
+
+def test_extracted_track_language_overrides_the_requested_one(tmp_path, monkeypatch):
+    mkv = tmp_path / "movie.mkv"
+    mkv.write_bytes(b"")
+    monkeypatch.setenv("DEEPL_API_KEY", "k")
+    seen = []
+    _fake_pipeline(monkeypatch, seen)
+
+    def fake_extract(mkv_file, output_srt, source_lang="en"):
+        output_srt.write_text(SOURCE, encoding="utf-8")
+        return "de"  # no Swedish track; the German one was used
+
+    monkeypatch.setattr(trans_cli, "extract_subtitle_from_mkv", fake_extract)
+
+    assert trans_cli.main(["-s", "sv", str(mkv)]) == 0
+    assert seen[0][seen[0].index("--src-lang") + 1] == "de"
+
+
+@pytest.mark.parametrize(
+    ("tag", "expected"),
+    [("eng", "en"), ("swe", "sv"), ("nob", "nb"), ("und", "auto"), ("", "auto")],
+)
+def test_track_source_language(tag, expected):
+    assert trans_cli.track_source_language(tag) == expected
+
+
+def test_batch_takes_source_language_sidecars(tmp_path):
+    names = ["A.S01E01.en.srt", "A.S01E02.srt", "A.S01E02.fi.srt", "A.S01E03.sv.srt",
+             "A.S01E04.srt", "A.S01E04.en.srt"]  # fmt: skip
+    files = [tmp_path / n for n in names]
+    chosen = [p.name for p in trans_cli.batch_sources(files, "en", "fi")]
+    assert chosen == ["A.S01E01.en.srt", "A.S01E02.srt", "A.S01E04.srt"]
+
+
+def test_required_proofread_that_cannot_run_exits_non_zero(
+    source_file, fixer_calls, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("DEEPL_API_KEY", "k")
+    monkeypatch.setattr(cli, "run_pipeline_proofread", lambda args, sub, dest: False)
+    out = tmp_path / "movie.fi.srt"
+
+    code = cli.main(
+        [str(source_file), "-t", "deepl-api", "--proofread", "-i", "en", "-o", "fi",
+         "--output", str(out)]
+    )  # fmt: skip
+
+    assert code == 3
+    assert out.exists()  # the paid translation is still saved
