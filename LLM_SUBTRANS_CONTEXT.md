@@ -1,5 +1,7 @@
 # LLM-Subtrans Style Context Implementation
 
+> **Historical.** This describes the context design as first planned. The code differs: context lines are not numbered, and the lines being translated are repeated inside the context. See `srtranslator/srt_file.py` for the current behaviour.
+
 ## Summary of Changes
 
 The subtitle translator now uses **llm-subtrans style context management**, providing DeepL with rich, structured context for maximum translation quality.
@@ -276,14 +278,39 @@ This provides:
 2. Per-chunk scene-aware history (automatic)
 3. Next-gen model quality (`quality_optimized`)
 4. Proper context separation (built-in)
+5. A bilingual review of the finished file (automatic, when the `proofread` extra and Gemini
+   credentials are present)
+
+## What context cannot fix
+
+Context makes DeepL translate each chunk better. It does not let DeepL revise a decision it
+has already made, and it cannot carry a fact backwards from a later scene to an earlier one.
+Three kinds of error survive this design:
+
+- **Sense chosen before the evidence arrives.** A word whose meaning only becomes clear two
+  scenes later is translated from the scene it appears in.
+- **Idioms.** DeepL renders many fixed expressions literally regardless of context.
+- **Address-form drift.** English "you" carries no signal, so sinä and te are chosen chunk by
+  chunk and can change while the relationship has not.
+
+The proof-reading stage exists for exactly these. It reads the whole programme in both
+languages at once, which is the one thing per-chunk context cannot do, and proposes
+corrections that are then checked in code before they are applied. See the proof-reading
+chapter in `CONFIGURATION.md` and `README.md`.
 
 ## Cost Impact
 
-**Zero additional cost:**
+**Context itself is free:**
 - Context parameter is **free** in DeepL API
 - Only `text` array counts toward billing
 - Rich context improves quality without cost
 
+The optional proof-reading pass is a separate, paid Gemini call: about $0.03 to $0.06 per
+episode. See `CONFIGURATION.md` for the cost controls.
+
 ---
 
-**Result:** Professional-grade Finnish subtitles with proper context awareness, accurate pronouns,  consistent tone, and natural dialogue flow—matching the quality of llm-subtrans but using DeepL's context parameter instead of LLM summarization.
+**Result:** Professional-grade Finnish subtitles with proper context awareness, accurate
+pronouns, consistent tone and natural dialogue flow, using DeepL's context parameter instead
+of LLM summarization, with an optional LLM pass afterwards for the meaning errors that no
+amount of per-chunk context can prevent.

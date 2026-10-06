@@ -18,10 +18,12 @@ This file provides guidance to AI coding assistants when working with code in th
 
 This project uses **uv** as the package manager. Do NOT use pip, pipenv, or poetry.
 
+`CLAUDE.md` is a symlink to this file.
+
 ```bash
 # Install dependencies
 make install
-# or: uv sync --all-extras
+# or: uv sync --all-extras   (--all-extras is what brings in the proofread extra)
 
 # Run any Python command
 uv run python -m srtranslator ...
@@ -43,6 +45,16 @@ SRTranslator/
 │   ├── srt_file.py         # SRT subtitle handling
 │   ├── ass_file.py         # ASS subtitle handling
 │   ├── util.py             # Utility functions
+│   ├── proofread/          # Bilingual AI proof-reading (optional extra)
+│   │   ├── document.py     # ProofreadCue / ProofreadDocument, both languages per cue
+│   │   ├── prompt.py       # System instruction and the bilingual transcript
+│   │   ├── schema.py       # pydantic response schema (the only pydantic import)
+│   │   ├── guards.py       # Per-patch safety checks, all computed in code
+│   │   ├── apply.py        # Guard pipeline, dedup and the change cap
+│   │   ├── engine.py       # Orchestration, cost guard, batching, report
+│   │   ├── cost.py         # Token estimate and price table
+│   │   ├── report.py       # <output>.proofread.json
+│   │   └── backends/       # base protocol, gemini (google-genai), fake (tests)
 │   └── translators/        # Translator implementations
 │       ├── base.py         # Abstract base class
 │       ├── deepl_api.py    # Official DeepL API
@@ -91,6 +103,9 @@ uv run srtranslator ./path/to/file.srt -i en -o es
 uv run srtranslator ./file.srt -i en -o es -t deepl-api --auth YOUR_API_KEY
 uv run srtranslator ./file.srt -i en -o es -t translatepy
 uv run srtranslator ./file.srt -i en -o es -t pydeeplx --proxies
+
+# Proof-read an existing translation against its original (edits in place, keeps .bak)
+uv run srtranslator ./file_fi.srt --proofread-only --source ./file.srt -i en -o fi
 ```
 
 ## Architecture
@@ -128,6 +143,80 @@ Built-in translators:
 - `translatepy.TranslatePy`: Uses translatepy library
 - `pydeeplx.PyDeepLX`: DeepLX API wrapper with proxy support
 
+
+## AI proof-reading (`proofread/`)
+
+An optional stage that reads the whole programme in both languages and corrects only cues
+whose meaning came out wrong. Install with the `proofread` extra (`google-genai`, `pydantic`).
+
+**Where it runs.** `__main__.main()` calls it after `sub.translate()` and before
+`postprocess()`. At that point `sub.content` is one line per cue and `sub.raw_contents` still
+holds the source text, so both languages are available and layout has not been decided yet.
+The order is: translate, proof-read, wrap, save, `fix-finnish-subs`.
+
+**How it is turned on.** Tri-state. `--proofread` forces it on and errors if it cannot run,
+`--no-proofread` forces it off, and with neither it runs when `google-genai` imports and
+Gemini credentials are in the environment.
+
+**Patches are identified by cue id, never by position**, and every one must quote the text it
+is replacing. That precondition is what makes the stage safe: a model that mixed up two cues
+produces a patch that no longer matches and is rejected instead of applied.
+
+### Gotchas
+
+- **Never trust the model's arithmetic or its account of what it preserved.** Every guard in
+  `guards.py` recomputes the fact itself. This is the same lesson as sisusub's
+  `_shortening_preserves_structure`, whose negation word list is reused here.
+- **`////` is the dialogue line break inside the pipeline.** `document.to_display` turns it
+  into a real newline for the prompt and `target_to_internal` puts it back, so `wrap_lines()`
+  behaves exactly as it does without the stage. Get this wrong and dash dialogue collapses.
+  The model never sees the placeholder, so `check_sanity` rejects one arriving in a patch:
+  `wrap_lines()` would otherwise turn it into a speaker line no guard had inspected.
+- **`document.DIALOGUE_DASHES` is the single definition of what opens a speaker turn**, and
+  `guards` imports it. They disagreed once: `is_dialogue_text` matched only the ASCII hyphen
+  while the guards accepted en and em dashes. A cue whose hyphens DeepL returned as en dashes
+  was then treated as narration, and its correction was flattened onto one line, silently
+  merging two speakers. If you touch one, touch both.
+- **Guards must validate the exact string that will be written.** `apply.decide` canonicalises
+  `after` through `guards.canonical` *before* any check runs. Validating the raw model string
+  and writing a tidied one let a blank line survive as a third speaker line.
+- **Whole-cue booleans are not enough for a multi-speaker cue.** `check_negation` compares line
+  by line when the line count is unchanged. A single presence check for the cue let one
+  speaker'"'"'s negation be removed while another'"'"'s kept the cue looking negative.
+- **A dash with nothing after it is not an utterance.** `check_structure` rejects it; the line
+  count and the dash both survive such a patch, so nothing else catches it.
+- **Pair mode does no wrapping afterwards.** `_render_for_file` therefore keeps whatever line
+  breaks a correction came back with, and only wraps a single line that is too long, at the
+  width the file already uses. Flattening there destroyed a correctly wrapped cue.
+- **The change cap has a floor of three patches** (`apply.MIN_PATCHES_ALLOWED`). Without it a
+  short file could never be corrected, because one patch in five cues is already 20%.
+- **Evidence for a number change need not contain a digit.** The original often spells the
+  number out ("half past five"), so only non-empty evidence and a meaning category are
+  required.
+- **A failure in this stage never raises into `main()`'s backup path.** The translation has
+  already been paid for, and `main()`'s handler truncates the file to a `.tmp` backup.
+  `run_proofread` catches everything and returns `status="error"`, but that is not the whole
+  boundary: `run_pipeline_proofread` and `run_proofread_only` catch bare `Exception` too,
+  because report writing raises `OSError` and `genai.Client` raises untyped auth errors, and
+  neither is inside `run_proofread`. Keep those catches broad.
+- **The report is written with mode `w`, so its path is checked against the subtitles first.**
+  `engine._report_path` refuses a path that resolves to the input, the source, the output or
+  the `.bak`, and it runs before the model is called. Without it `--proofread-report` aimed at
+  a subtitle replaced that subtitle with JSON, during a dry run, with no backup.
+- **Matching cue counts do not mean the cues correspond.** `_check_timeline_alignment` refuses
+  a pair whose per-cue offsets spread by more than `MAX_OFFSET_SPREAD_SECONDS`. A uniform
+  shift passes, because ffsubsync legitimately produces one. Patch preconditions cannot catch
+  a misalignment: they quote the target text, which matches perfectly while the source beside
+  it is the wrong cue.
+- **A model answer with no `patches` key is a failed call, not a clean review.** `_decode`
+  raises rather than defaulting to an empty list, which used to report a quota error as a
+  subtitle that needed no corrections.
+- **`thinking_level`, never `thinking_budget`.** The Gemini 3 models reject the budget form,
+  and sending both is an error. The SDK normalises the level to its own enum, so compare
+  `.value` in tests.
+- **Prices in `cost.py` were verified in September 2026 and double on 1 January 2027.** An
+  unknown model yields a `None` cost, which never trips the cost guard.
+
 ## Creating Custom Translators
 
 Extend `srtranslator.translators.base.Translator`:
@@ -145,7 +234,9 @@ Extend `srtranslator.translators.base.Translator`:
   request body; `util.fit_context` trims the head of the context to stay under it.
 - **Never feed translated text back as context.** The backward walk in
   `_build_deepl_context` stops at `self.start_from`, because a resumed run holds
-  target-language text below that index.
+  target-language text below that index. `_load_backup` has the matching half of this: it
+  restores `raw_contents` after loading the `.tmp` file, which otherwise overwrites the
+  source text of every resumed cue with that cue's own translation.
 - **The DeepL API does not strip `\N`.** Verified live across every parameter combination,
   both models, and a bare request: a literal `\N` comes back intact. The comment claiming
   otherwise, and the placeholder machinery built on it, predate the API translator and
