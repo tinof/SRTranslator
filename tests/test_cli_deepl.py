@@ -288,3 +288,10 @@ def test_required_proofread_that_cannot_run_exits_non_zero(
 
     assert code == 3
     assert out.exists()  # the paid translation is still saved
+
+
+def test_batch_reads_three_letter_and_non_language_suffixes(tmp_path):
+    names = ["A.S01E01.eng.srt", "tt1.src.srt", "A.S01E02.fin.srt", "A.S01E03.swe.srt"]
+    files = [tmp_path / n for n in names]
+    chosen = sorted(p.name for p in trans_cli.batch_sources(files, "en", "fi"))
+    assert chosen == ["A.S01E01.eng.srt", "tt1.src.srt"]

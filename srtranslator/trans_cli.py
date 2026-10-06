@@ -325,6 +325,23 @@ def is_already_translated(filepath: Path) -> bool:
     return bool(_LANG_SUFFIX_RE.search(filepath.name))
 
 
+def language_tag(path: Path) -> str | None:
+    """The language a file name is tagged with, as a two-letter code, or None.
+
+    "Show.S01E01.eng.srt" is English. A suffix that is not a language
+    ("tt123.src.srt") leaves the file untagged.
+    """
+    match = _LANG_SUFFIX_RE.search(path.name)
+    if not match:
+        return None
+    base = match.group(1).lower().split("-")[0]
+    code = TRACK_LANGUAGES.get(base, base)
+    code = SOURCE_LANGUAGE_ALIASES.get(code, code)
+    if code == "no":
+        code = "nb"
+    return code if code in DEEPL_SOURCE_LANGUAGES else None
+
+
 def batch_sources(files: list[Path], source_lang: str, target_lang: str) -> list[Path]:
     """The subtitles in a folder that are translation sources.
 
@@ -333,11 +350,10 @@ def batch_sources(files: list[Path], source_lang: str, target_lang: str) -> list
     any other language when the source is fixed, is not. Two sources that would
     write the same output keep only the first, untagged before tagged.
     """
-    target = target_lang.lower()
+    target = target_lang.lower().split("-")[0]
     chosen: dict[Path, Path] = {}
-    for path in sorted(files, key=lambda f: (bool(_LANG_SUFFIX_RE.search(f.name)), f.name)):
-        match = _LANG_SUFFIX_RE.search(path.name)
-        tag = match.group(1).lower() if match else None
+    for path in sorted(files, key=lambda f: (language_tag(f) is not None, f.name)):
+        tag = language_tag(path)
         if tag == target or (tag and source_lang != "auto" and tag != source_lang):
             continue
         output = build_plex_output_path(path, target_lang)
