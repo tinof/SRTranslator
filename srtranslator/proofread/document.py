@@ -14,10 +14,12 @@ from datetime import timedelta
 import srt
 from srt import Subtitle
 
+from ..preprocess import strip_tags
 from .models import ProofreadError
 
-# Mirrors SrtFile._detect_scenes. A gap this long reads as a cut to the viewer,
-# so dialogue either side of it rarely belongs to the same exchange.
+# Scenes for the reviewer's transcript. Deliberately much shorter than the 30 s
+# SrtFile uses to plan translation requests: here a scene is only a visual break
+# in the transcript, and a short pause already separates exchanges.
 SCENE_GAP_SECONDS = 2.0
 
 # SrtFile encodes the line break of a dash-dialogue cue as this placeholder while
@@ -44,6 +46,9 @@ class ProofreadCue:
     source: str
     target: str
     is_dialogue: bool
+    #: Italics of the translated cue, which the model never sees: "none", "all"
+    #: (the whole cue is one italic span) or "partial".
+    italics: str = "none"
 
     @property
     def duration_seconds(self) -> float:
@@ -59,6 +64,9 @@ class ProofreadDocument:
     source_lang: str
     target_lang: str
     name: str = ""
+    #: Cue id -> why the translation step suspects that cue ("empty",
+    #: "untranslated", "dialogue_lines"). Shown to the model as a CHECK line.
+    attention: dict[int, str] = field(default_factory=dict)
     _by_id: dict[int, ProofreadCue] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
@@ -89,8 +97,29 @@ def is_dialogue_text(text: str) -> bool:
 
 
 def to_display(content: str) -> str:
-    """Internal cue text as the model should see it, with real line breaks."""
-    return content.replace(DIALOGUE_LINE_BREAK, "\n").strip()
+    """Internal cue text as the model should see it, with real line breaks.
+
+    Tags are removed: the guards reject any correction that contains markup, so
+    the model must not be shown any. Italics are put back by apply_italics().
+    """
+    return strip_tags(content.replace(DIALOGUE_LINE_BREAK, "\n")).strip()
+
+
+def italics_state(content: str) -> str:
+    """Whether a cue is italic as a whole, in part, or not at all."""
+    text = content.replace(DIALOGUE_LINE_BREAK, "\n").strip()
+    if "<i>" not in text:
+        return "none"
+    if text.startswith("<i>") and text.endswith("</i>") and text.count("<i>") == 1:
+        return "all"
+    return "partial"
+
+
+def apply_italics(text: str, italics: str) -> str:
+    """Put a fully italic cue's italics back around its corrected text."""
+    if italics == "all":
+        return f"<i>{text}</i>"
+    return text
 
 
 def target_to_internal(text: str, is_dialogue: bool) -> str:
@@ -142,6 +171,7 @@ def document_from_srt_file(sub, source_lang: str, target_lang: str) -> Proofread
                 source=sub.raw_contents.get(subtitle.index, "").strip(),
                 target=target,
                 is_dialogue=is_dialogue_text(target),
+                italics=italics_state(subtitle.content),
             )
         )
 
@@ -151,6 +181,7 @@ def document_from_srt_file(sub, source_lang: str, target_lang: str) -> Proofread
         source_lang=source_lang,
         target_lang=target_lang,
         name=os.path.basename(sub.filepath),
+        attention=dict(getattr(sub, "attention", {}) or {}),
     )
 
 
@@ -226,15 +257,16 @@ def document_from_pair(
 
     cues: list[ProofreadCue] = []
     for source_sub, translated_sub in zip(source_subs, translated_subs, strict=True):
-        target = translated_sub.content.strip()
+        target = strip_tags(translated_sub.content).strip()
         cues.append(
             ProofreadCue(
                 id=translated_sub.index,
                 start=translated_sub.start,
                 end=translated_sub.end,
-                source=" ".join(source_sub.content.split()),
+                source=" ".join(strip_tags(source_sub.content).split()),
                 target=target,
                 is_dialogue=is_dialogue_text(target),
+                italics=italics_state(translated_sub.content),
             )
         )
 

@@ -11,6 +11,7 @@ from . import prompt as prompt_module
 from .apply import decide
 from .document import (
     ProofreadDocument,
+    apply_italics,
     document_from_pair,
     document_from_srt_file,
     target_to_internal,
@@ -352,7 +353,9 @@ def proofread_srt_file(
             cue = by_id.get(patch.id)
             if subtitle is None or cue is None:
                 continue
-            subtitle.content = target_to_internal(patch.after, cue.is_dialogue)
+            subtitle.content = apply_italics(
+                target_to_internal(patch.after, cue.is_dialogue), cue.italics
+            )
 
     result.report_path = _write_report_safely(
         _build_report(document, result, options, sub.filepath), report_path
@@ -398,13 +401,17 @@ def proofread_pair(
 
     if result.status == "applied" and result.applied:
         by_index = {subtitle.index: subtitle for subtitle in translated_subs}
+        by_id = document.by_id()
 
         width = _observed_line_width(document, options.wrap_limit)
         for patch in result.applied:
             subtitle = by_index.get(patch.id)
-            if subtitle is None:
+            cue = by_id.get(patch.id)
+            if subtitle is None or cue is None:
                 continue
-            subtitle.content = _render_for_file(patch.after, width, options.max_lines)
+            subtitle.content = apply_italics(
+                _render_for_file(patch.after, width, options.max_lines), cue.italics
+            )
 
         if backup and os.path.abspath(destination) == os.path.abspath(translated_path):
             shutil.copy2(translated_path, f"{translated_path}.bak")

@@ -79,6 +79,7 @@ def decide(
             guards.check_severity(patch, min_severity)
             or guards.check_no_change(patch)
             or guards.check_precondition(patch, cue)
+            or guards.check_italics(cue)
             or guards.check_structure(patch, cue)
             or guards.check_numbers(patch)
             or guards.check_negation(patch)

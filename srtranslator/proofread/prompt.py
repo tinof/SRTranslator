@@ -9,7 +9,7 @@ from .document import ProofreadDocument
 
 #: Bumped whenever the wire format of the transcript changes, so reports from
 #: different formats are never compared as if they were the same experiment.
-PROMPT_FORMAT_VERSION = "1"
+PROMPT_FORMAT_VERSION = "2"
 
 LANGUAGE_NAMES: dict[str, str] = {
     "en": "English",
@@ -54,6 +54,10 @@ touches them will be thrown away:
 - punctuation style, quote marks, dashes, ellipses, capitalisation or spelling conventions
 - wording that is already correct but which you would have phrased differently
 
+A cue marked CHECK was flagged by the translation step: it came back empty, unchanged from the
+original, or with a different number of speaker lines. Look at those cues first. If the
+translation there is in fact correct, leave it alone.
+
 A cue with no meaning problem must not appear in your answer. If the whole translation is sound,
 return an empty list of patches. That is a valid and expected answer.
 
@@ -83,6 +87,13 @@ Notes for Finnish:
 - Match the register of the original. Spoken, colloquial dialogue should not become formal written
   Finnish, and a formal speech should not become slang.
 - Watch compound words and cases that change who does what to whom."""
+
+
+_ATTENTION_TEXT = {
+    "empty": "the translation came back empty",
+    "untranslated": "the translation is identical to the original",
+    "dialogue_lines": "the number of speaker lines changed in translation",
+}
 
 
 def language_name(code: str) -> str:
@@ -146,6 +157,9 @@ def build_transcript(document: ProofreadDocument) -> str:
         lines.append(f"[{cue.id}] ({_timestamp(cue.start)}-{_timestamp(cue.end)})")
         lines.append(f"  {source_label}: {cue.source}")
         lines.append(f"  {target_label}: {target}")
+        reason = document.attention.get(cue.id)
+        if reason:
+            lines.append(f"  CHECK: {_ATTENTION_TEXT.get(reason, reason)}")
 
     return "\n".join(lines)
 

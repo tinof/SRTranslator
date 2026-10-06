@@ -198,6 +198,18 @@ def check_length(
     return None
 
 
+def check_italics(cue: ProofreadCue) -> str | None:
+    """Refuse to rewrite a cue that is italic only in part.
+
+    The model sees the cue without tags, so its correction cannot say which
+    words were italic. A cue italic as a whole gets its italics back; one with a
+    single italic word would lose it, and that word is usually a sign or a voice.
+    """
+    if cue.italics == "partial":
+        return "italic_markup"
+    return None
+
+
 def check_sanity(patch: Patch) -> str | None:
     if not patch.after.strip():
         return "empty_after"
