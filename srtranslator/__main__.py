@@ -7,6 +7,7 @@ import sys
 import traceback
 
 from .ass_file import AssFile
+from .presets import instruction_preset
 from .proofread import ProofreadOptions, proofread_pair, proofread_srt_file
 from .proofread.backends import gemini as gemini_backend
 from .proofread.models import ProofreadError
@@ -127,7 +128,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--auth",
         type=str,
-        help="API key if needed by the translator",
+        help=(
+            "API key if needed by the translator. deepl-api reads $DEEPL_API_KEY when "
+            "this is omitted, which keeps the key out of the process list"
+        ),
+    )
+
+    parser.add_argument(
+        "--output",
+        type=str,
+        metavar="PATH",
+        default=None,
+        help="Where to write the translation. Default: <input>_<dest-lang>.<ext>",
+    )
+
+    parser.add_argument(
+        "--filter-sdh",
+        action="store_true",
+        help=(
+            "Remove hearing-impaired annotations (sound effects, music, speaker labels) "
+            "before translating. .srt only"
+        ),
+    )
+
+    parser.add_argument(
+        "--merge-fragments",
+        action="store_true",
+        help="Join a sentence split across two short cues before translating. .srt only",
     )
 
     parser.add_argument(
@@ -165,6 +192,28 @@ def build_parser() -> argparse.ArgumentParser:
             "DeepL custom instruction, repeatable (only for deepl-api). At most 10 "
             "instructions of 300 characters each, for example "
             "'Keep character names untranslated'"
+        ),
+    )
+
+    parser.add_argument(
+        "--instruction-preset",
+        type=str,
+        metavar="LANG",
+        default=None,
+        help=(
+            "Add a built-in set of custom instructions for this target language "
+            "(only for deepl-api). Available: fi"
+        ),
+    )
+
+    parser.add_argument(
+        "--glossary-id",
+        type=str,
+        metavar="ID",
+        default=None,
+        help=(
+            "DeepL glossary to apply (only for deepl-api). Ignored when the source "
+            "language is auto, because DeepL needs the language pair"
         ),
     )
 
@@ -310,12 +359,21 @@ def configure_headless(show_browser: bool) -> None:
     os.environ["MOZ_HEADLESS"] = "1"
 
 
-def load_subtitle(filepath: str):
+def load_subtitle(filepath: str, **srt_options):
     try:
         return AssFile(filepath)
     except AttributeError:
         LOG.info("Falling back to SRT parsing")
-        return SrtFile(filepath)
+        return SrtFile(filepath, **srt_options)
+
+
+def is_finnish(lang: str) -> bool:
+    return (lang or "").strip().lower() in ("fi", "fin", "finnish")
+
+
+#: Arguments for sisusub's fix-finnish-subs, the same house style exsubs uses.
+#: Its own AI review stays off: the Gemini proof-read has already run.
+FIXER_ARGS = ["--no-ai-review", "--width-limit", "42", "--max-cps", "17", "--cps-target", "15"]
 
 
 def proofread_enabled(args: argparse.Namespace) -> bool:
@@ -471,20 +529,36 @@ def main(argv: list[str] | None = None) -> int:
     translator_args = {}
     if args.auth:
         translator_args["api_key"] = args.auth
+    elif args.translator == "deepl-api":
+        api_key = os.environ.get("DEEPL_API_KEY", "").strip()
+        if not api_key:
+            parser.error("deepl-api needs --auth or the DEEPL_API_KEY environment variable")
+        translator_args["api_key"] = api_key
 
     if args.translator == "pydeeplx" and args.proxies:
         translator_args["proxies"] = args.proxies
+
+    instructions = list(args.custom_instructions or [])
+    if args.instruction_preset:
+        try:
+            instructions = instruction_preset(args.instruction_preset) + instructions
+        except ValueError as error:
+            parser.error(str(error))
 
     if args.translator == "deepl-api":
         if args.context:
             translator_args["context"] = args.context
         translator_args["model_type"] = args.model_type
-        if args.custom_instructions:
-            if len(args.custom_instructions) > 10:
-                parser.error("--instruction can be used at most 10 times")
-            translator_args["custom_instructions"] = args.custom_instructions
-    elif args.custom_instructions:
-        parser.error("--instruction is only supported by the deepl-api translator")
+        if instructions:
+            if len(instructions) > 10:
+                parser.error("At most 10 custom instructions, including the preset")
+            translator_args["custom_instructions"] = instructions
+        if args.glossary_id:
+            translator_args["glossary_id"] = args.glossary_id
+    elif instructions or args.glossary_id:
+        parser.error(
+            "--instruction, --instruction-preset and --glossary-id need the deepl-api translator"
+        )
 
     try:
         translator = BUILTIN_TRANSLATORS[args.translator](**translator_args)
@@ -492,11 +566,17 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(error))
     sub = None
     try:
-        sub = load_subtitle(args.filepath)
+        sub = load_subtitle(
+            args.filepath,
+            # Only DeepL's XML tag handling carries <i> through a translation.
+            keep_italics=args.translator == "deepl-api",
+            filter_sdh=args.filter_sdh,
+            merge_fragments=args.merge_fragments,
+        )
 
         sub.translate(translator, args.src_lang, args.dest_lang)
 
-        dest_path = (
+        dest_path = args.output or (
             f"{os.path.splitext(args.filepath)[0]}_{args.dest_lang}"
             f"{os.path.splitext(args.filepath)[1]}"
         )
@@ -535,12 +615,13 @@ def main(argv: list[str] | None = None) -> int:
         sub.save(dest_path)
         LOG.info("Translation completed. Saved to %s", dest_path)
 
-        # Run fix-finnish-subs on the translated file (unless disabled)
-        if not args.no_external_fixer and isinstance(sub, SrtFile):
+        # Run fix-finnish-subs on a Finnish translation (unless disabled). Its
+        # rules are Finnish rules, so it never touches another language.
+        if not args.no_external_fixer and isinstance(sub, SrtFile) and is_finnish(args.dest_lang):
             fixer_result = sub.run_external_fixer(
                 dest_path,
                 command="fix-finnish-subs",
-                args=["--no-ai-review"],
+                args=[*FIXER_ARGS, "--report", f"{dest_path}.fixer-report.txt"],
             )
             if fixer_result["success"]:
                 LOG.info("fix-finnish-subs completed successfully")

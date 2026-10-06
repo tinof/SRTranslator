@@ -49,6 +49,7 @@ proofread = [
 
 [project.scripts]
 srtranslator = "srtranslator.__main__:main"
+srtranslator-trans = "srtranslator.trans_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/tinof/SRTranslator"
