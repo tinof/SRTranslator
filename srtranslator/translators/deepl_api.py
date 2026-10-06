@@ -36,7 +36,11 @@ def xml_unescape_text(text: str) -> str:
 
 
 class DeeplApi(Translator):
-    max_char = 1500
+    # Context is free and requests are billed per character, so bigger requests
+    # only save round trips. DeepL documents a limit of 50 texts per request; it
+    # accepted 51 when tested, but the documented limit is the one to rely on.
+    max_char = 5000
+    max_items = 50
 
     def __init__(
         self,
@@ -47,6 +51,7 @@ class DeeplApi(Translator):
         tag_handling="xml",
         split_sentences="nonewlines",
         custom_instructions: list[str] | None = None,
+        glossary_id: str | None = None,
     ):
         if custom_instructions:
             if len(custom_instructions) > MAX_CUSTOM_INSTRUCTIONS:
@@ -67,6 +72,7 @@ class DeeplApi(Translator):
         self.tag_handling = tag_handling
         self.split_sentences = split_sentences
         self.custom_instructions = custom_instructions
+        self.glossary_id = glossary_id
         self.billed_characters = 0
         self.logged_model_type = False  # Only log once
 
@@ -101,6 +107,11 @@ class DeeplApi(Translator):
 
         if self.custom_instructions:
             kwargs["custom_instructions"] = self.custom_instructions
+
+        # A glossary is tied to a language pair, so DeepL requires an explicit
+        # source language with it. Under auto-detection it is left out.
+        if self.glossary_id and kwargs["source_lang"]:
+            kwargs["glossary"] = self.glossary_id
 
         return kwargs
 

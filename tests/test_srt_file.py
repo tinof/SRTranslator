@@ -78,47 +78,37 @@ def test_get_next_chunk_respects_limit(tmp_path):
     assert [sub.content for sub in chunks[1]] == ["CCCCC"]
 
 
-def test_build_deepl_context_includes_neighbors(tmp_path):
+def test_build_deepl_context_is_chronological(tmp_path):
     subtitles = [
         srt.Subtitle(1, timedelta(seconds=0), timedelta(seconds=1), "Intro"),
         srt.Subtitle(2, timedelta(seconds=1), timedelta(seconds=2), "Question"),
-        # Gap of 3 seconds starts new scene
-        srt.Subtitle(3, timedelta(seconds=5), timedelta(seconds=6), "Answer"),
-        srt.Subtitle(4, timedelta(seconds=6.5), timedelta(seconds=7), "Follow up"),
+        # A pause of 40 seconds starts a new scene
+        srt.Subtitle(3, timedelta(seconds=42), timedelta(seconds=43), "Answer"),
+        srt.Subtitle(4, timedelta(seconds=43.5), timedelta(seconds=44), "Follow up"),
     ]
-    content = srt.compose(subtitles)
-    path = write_sample_srt(tmp_path, content)
+    path = write_sample_srt(tmp_path, srt.compose(subtitles))
     srt_file = SrtFile(str(path))
 
-    scenes = srt_file._detect_scenes()
-    assert scenes == [0, 2]
+    assert srt_file._detect_scenes() == [0, 2]
 
-    # Build context for second subtitle (index 1) inside first scene
+    # Context for the second cue: what came before, the cue itself, what follows.
+    # It may cross the scene boundary, because names and topics carry over.
+    context = srt_file._build_deepl_context(chunk_start_idx=1, chunk_end_idx=1)
+    assert context == "Intro\nQuestion\nAnswer\nFollow up"
+
+
+def test_build_deepl_context_after_context_starts_at_chunk_end(tmp_path):
+    subtitles = [
+        srt.Subtitle(i + 1, timedelta(seconds=i), timedelta(seconds=i + 0.5), f"Line {i}")
+        for i in range(6)
+    ]
+    path = write_sample_srt(tmp_path, srt.compose(subtitles))
+    srt_file = SrtFile(str(path))
+
     context = srt_file._build_deepl_context(
-        scene_index=0,
-        chunk_start_idx=1,
-        chunk_end_idx=1,
-        scene_start_idx=0,
-        scene_end_idx=1,
+        chunk_start_idx=1, chunk_end_idx=3, max_chars_before=7, max_chars_after=7
     )
-
-    assert context is not None
-    # Context is raw dialogue, without headers or line numbers
-    assert "Intro" in context
-    assert "Answer" not in context  # next scene never bleeds in
-
-    # Context for first subtitle of second scene should include upcoming line
-    context_scene_two = srt_file._build_deepl_context(
-        scene_index=1,
-        chunk_start_idx=2,
-        chunk_end_idx=2,
-        scene_start_idx=2,
-        scene_end_idx=3,
-    )
-
-    assert context_scene_two is not None
-    assert "Follow up" in context_scene_two
-    assert "Intro" not in context_scene_two  # previous scene never bleeds in
+    assert context == "Line 0\nLine 1\nLine 2\nLine 3\nLine 4"
 
 
 def test_context_skips_already_translated_lines_on_resume(tmp_path):
@@ -131,13 +121,7 @@ def test_context_skips_already_translated_lines_on_resume(tmp_path):
     srt_file = SrtFile(str(path))
     srt_file.start_from = 2
 
-    context = srt_file._build_deepl_context(
-        scene_index=0,
-        chunk_start_idx=2,
-        chunk_end_idx=2,
-        scene_start_idx=0,
-        scene_end_idx=3,
-    )
+    context = srt_file._build_deepl_context(chunk_start_idx=2, chunk_end_idx=2)
 
     assert context is not None
     assert "First" not in context

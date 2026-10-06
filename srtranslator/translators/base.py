@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 
 class Translator(ABC):
     max_char: int
+    #: Most cues one request may carry, or None for no limit beyond max_char.
+    max_items: int | None = None
 
     def translate(
         self,

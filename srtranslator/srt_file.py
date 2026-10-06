@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from collections.abc import Generator
@@ -5,8 +6,31 @@ from collections.abc import Generator
 import srt
 from srt import Subtitle
 
+from . import preprocess
+from .preprocess import strip_tags
 from .translators.base import Translator
 from .util import fit_context, show_progress
+
+LOG = logging.getLogger("srtranslator")
+
+#: A silence this long reads as a cut to the viewer. Chunks never straddle one
+#: unless a single scene is too big for one request.
+SCENE_GAP_SECONDS = 30.0
+
+#: Source text sent as free DeepL context around each chunk, in characters.
+CONTEXT_CHARS_BEFORE = 4000
+CONTEXT_CHARS_AFTER = 2000
+
+#: A translation identical to its source is only suspicious when the cue has
+#: real words in it; "OK" or a name legitimately comes back unchanged.
+UNTRANSLATED_MIN_LETTERS = 15
+
+#: Above this a cue cannot be read in time. Reported, never sent for review:
+#: shortening is fix-finnish-subs' job, not the reviewer's.
+FAST_CPS = 25.0
+
+#: SrtFile writes the line break of a dash-dialogue cue as this while in flight.
+DIALOGUE_LINE_BREAK = "////"
 
 
 class SrtFile:
@@ -14,9 +38,21 @@ class SrtFile:
 
     Args:
         filepath (str): file path of srt
+        keep_italics (bool): keep <i> tags in the text sent for translation.
+            Only for a translator that handles XML tags (deepl-api).
+        filter_sdh (bool): remove hearing-impaired annotations first.
+        merge_fragments (bool): join sentences split across two short cues.
     """
 
-    def __init__(self, filepath: str, progress_callback=show_progress) -> None:
+    def __init__(
+        self,
+        filepath: str,
+        progress_callback=show_progress,
+        *,
+        keep_italics: bool = False,
+        filter_sdh: bool = False,
+        merge_fragments: bool = False,
+    ) -> None:
         self.filepath = filepath
         self.backup_file = f"{self.filepath}.tmp"
         self.subtitles = []
@@ -24,10 +60,21 @@ class SrtFile:
         self.start_from = 0
         self.current_subtitle = 0
         self.progress_callback = progress_callback
+        self.keep_italics = keep_italics
+        #: Cue index -> why the translation of that cue looks wrong. Read by the
+        #: proof-reading stage, which reviews these cues with extra care.
+        self.attention: dict[int, str] = {}
 
         print(f"Loading {filepath} as SRT")
-        with open(filepath, encoding="utf-8", errors="ignore") as input_file:
-            self.subtitles = self.load_from_file(input_file)
+        with open(filepath, "rb") as input_file:
+            text = preprocess.decode_subtitle_bytes(input_file.read())
+
+        subtitles = list(srt.sort_and_reindex(list(srt.parse(text))))
+        if filter_sdh:
+            subtitles = preprocess.filter_sdh(subtitles)
+        if merge_fragments:
+            subtitles = preprocess.merge_continuations(subtitles)
+        self.subtitles = self._clean_subs_content(subtitles)
 
         self._load_backup()
 
@@ -59,7 +106,9 @@ class SrtFile:
         srt_file = srt.parse(input_file)
         subtitles = list(srt_file)
         subtitles = list(srt.sort_and_reindex(subtitles))
-        return self._clean_subs_content(subtitles)
+        # A backup holds finished translations, one per source cue. Dropping an
+        # empty one would shift every cue after it onto the wrong source.
+        return self._clean_subs_content(subtitles, drop_empty=False)
 
     def _get_next_chunk(self, chunk_size: int = 4500) -> Generator:
         """Get a portion of the subtitles at the time based on the chunk size
@@ -92,38 +141,46 @@ class SrtFile:
         # Yield last chunk
         yield portion
 
-    def _clean_subs_content(self, subtitles: list[Subtitle]) -> list[Subtitle]:
+    def _clean_subs_content(
+        self, subtitles: list[Subtitle], drop_empty: bool = True
+    ) -> list[Subtitle]:
         """Cleans subtitles content and delete line breaks.
         Also stores raw content before placeholder mutations for context building.
+
+        A cue with no readable text is dropped and the rest renumbered. Sending
+        it as "..." used to put an empty subtitle on screen after translation.
 
         Args:
             subtitles (List[Subtitle]): List of subtitles
 
         Returns:
-            List[Subtitle]: Same list of subtitles, but cleaned
+            List[Subtitle]: The cues that keep text, cleaned and renumbered
         """
-        cleanr = re.compile("<.*?>")
-
+        kept = []
         for sub in subtitles:
-            sub.content = cleanr.sub("", sub.content)
-            sub.content = srt.make_legal_content(sub.content)
-            sub.content = sub.content.strip()
+            content = preprocess.clean_markup(sub.content, keep_italics=self.keep_italics)
+            content = srt.make_legal_content(content).strip()
+            if drop_empty and not strip_tags(content).strip():
+                continue
+            sub.content = content
+            kept.append(sub)
 
-            if sub.content == "":
-                sub.content = "..."
+        for number, sub in enumerate(kept, start=1):
+            sub.index = number
 
             # Store raw content BEFORE placeholder mutations (for context building)
             # Convert line breaks to spaces for clean context
-            raw_content = sub.content.replace("\n", " ").strip()
+            raw_content = " ".join(strip_tags(sub.content).split())
             self.raw_contents[sub.index] = raw_content
 
-            if all(sentence.startswith("-") for sentence in sub.content.split("\n")):
-                sub.content = sub.content.replace("\n", "////")
+            lines = strip_tags(sub.content).split("\n")
+            if all(line.lstrip().startswith("-") for line in lines):
+                sub.content = sub.content.replace("\n", DIALOGUE_LINE_BREAK)
                 continue
 
             sub.content = sub.content.replace("\n", " ")
 
-        return subtitles
+        return kept
 
     def wrap_lines(
         self,
@@ -194,7 +251,7 @@ class SrtFile:
         # Join sentences with line break
         return "\n".join(wrapped_lines)
 
-    def _detect_scenes(self, scene_gap_seconds: float = 2.0) -> list[int]:
+    def _detect_scenes(self, scene_gap_seconds: float = SCENE_GAP_SECONDS) -> list[int]:
         """Detect scene boundaries based on time gaps between subtitles.
 
         Args:
@@ -217,91 +274,118 @@ class SrtFile:
 
         return scene_starts
 
-    def _build_deepl_context(
-        self,
-        scene_index: int,
-        chunk_start_idx: int,
-        chunk_end_idx: int,
-        scene_start_idx: int,
-        scene_end_idx: int,
-        max_history_chars_before: int = 2000,
-        max_history_chars_after: int = 1000,
-        max_summary_chars: int = 2000,
-    ) -> str | None:
-        """Build DeepL context parameter (llm-subtrans style).
+    def _plan_chunks(self, max_char: int, max_items: int | None = None) -> list[tuple[int, int]]:
+        """Split the untranslated cues into requests that follow the scenes.
 
-        Context contains surrounding lines in source language using raw content
-        (without placeholder artifacts). Uses newlines for dialogue boundaries.
-
-        Args:
-            scene_index: Current scene number
-            chunk_start_idx: First subtitle index in current chunk
-            chunk_end_idx: Last subtitle index in current chunk
-            scene_start_idx: First subtitle index in current scene
-            scene_end_idx: Last subtitle index in current scene
-            max_history_chars_before: Max chars for previous dialogue
-            max_history_chars_after: Max chars for upcoming dialogue
-            max_summary_chars: Max chars for distant scene summary
+        Whole scenes are packed into one request while they fit. A scene too big
+        for one request is split at its longest pause, recursively, so a chunk
+        boundary always falls where the conversation pauses most. Ported from
+        llm-subtrans SubtitleBatcher.
 
         Returns:
-            str: Formatted context string for DeepL
+            Inclusive (first, last) positions in self.subtitles, in order.
         """
-        # Build history_before: walk backwards from chunk_start_idx - 1.
-        # Never walk below start_from: on a resumed run those entries hold
-        # already translated text, not source language.
-        history_before_lines = []
-        current_before_chars = 0
-        history_floor = max(scene_start_idx, self.start_from)
+        start = self.start_from
+        end = len(self.subtitles) - 1
+        if start > end:
+            return []
 
-        for i in range(chunk_start_idx - 1, history_floor - 1, -1):
-            # Use raw content (without placeholders) for context
-            sub = self.subtitles[i]
-            line_content = self.raw_contents.get(sub.index, sub.content.strip())
-            if not line_content or line_content == "...":
+        def size(first: int, last: int) -> int:
+            # Same measure as _get_next_chunk: text plus one break per cue.
+            return sum(len(self.subtitles[i].content) + 1 for i in range(first, last + 1))
+
+        def fits(first: int, last: int) -> bool:
+            if max_items and last - first + 1 > max_items:
+                return False
+            return size(first, last) < max_char
+
+        def split(first: int, last: int) -> list[tuple[int, int]]:
+            if first == last or fits(first, last):
+                return [(first, last)]
+            # Cut after the cue followed by the longest pause.
+            cut = max(
+                range(first, last),
+                key=lambda i: (self.subtitles[i + 1].start - self.subtitles[i].end).total_seconds(),
+            )
+            return split(first, cut) + split(cut + 1, last)
+
+        blocks: list[tuple[int, int]] = []
+        scene_starts = [s for s in self._detect_scenes() if s > start]
+        bounds = [start, *scene_starts, end + 1]
+        for first, next_first in zip(bounds, bounds[1:], strict=False):
+            blocks.extend(split(first, next_first - 1))
+
+        chunks: list[tuple[int, int]] = []
+        for first, last in blocks:
+            if chunks and fits(chunks[-1][0], last):
+                chunks[-1] = (chunks[-1][0], last)
+            else:
+                chunks.append((first, last))
+        return chunks
+
+    def _context_line(self, position: int) -> str:
+        sub = self.subtitles[position]
+        return self.raw_contents.get(sub.index, strip_tags(sub.content).strip())
+
+    def _build_deepl_context(
+        self,
+        chunk_start_idx: int,
+        chunk_end_idx: int,
+        max_chars_before: int = CONTEXT_CHARS_BEFORE,
+        max_chars_after: int = CONTEXT_CHARS_AFTER,
+    ) -> str | None:
+        """Source text around a chunk, in reading order, for DeepL's context.
+
+        DeepL translates each cue of a request on its own, so the context is the
+        only place a cue can see its neighbours. It holds the lines before the
+        chunk, the chunk's own lines, then the lines after it. Context is not
+        billed. It may cross a scene boundary: names and topics carry over.
+
+        Lines before ``start_from`` are never used: on a resumed run they hold
+        already translated text, not source language.
+        """
+        before: list[str] = []
+        used = 0
+        for i in range(chunk_start_idx - 1, self.start_from - 1, -1):
+            line = self._context_line(i)
+            if not line:
                 continue
-
-            # Format: just the content
-            formatted_line = line_content
-            line_length = len(formatted_line) + 1  # +1 for newline
-
-            if current_before_chars + line_length > max_history_chars_before:
+            if used + len(line) + 1 > max_chars_before:
                 break
+            before.insert(0, line)
+            used += len(line) + 1
 
-            history_before_lines.insert(0, formatted_line)  # Prepend to keep chronological
-            current_before_chars += line_length
+        chunk = [
+            line
+            for line in (self._context_line(i) for i in range(chunk_start_idx, chunk_end_idx + 1))
+            if line
+        ]
 
-        # Build history_after: walk forwards from chunk_end_idx + 1
-        history_after_lines = []
-        current_after_chars = 0
-
-        for i in range(chunk_end_idx + 1, scene_end_idx + 1):
-            # Use raw content (without placeholders) for context
-            sub = self.subtitles[i]
-            line_content = self.raw_contents.get(sub.index, sub.content.strip())
-            if not line_content or line_content == "...":
+        after: list[str] = []
+        used = 0
+        for i in range(chunk_end_idx + 1, len(self.subtitles)):
+            line = self._context_line(i)
+            if not line:
                 continue
-
-            formatted_line = line_content
-            line_length = len(formatted_line) + 1
-
-            if current_after_chars + line_length > max_history_chars_after:
+            if used + len(line) + 1 > max_chars_after:
                 break
+            after.append(line)
+            used += len(line) + 1
 
-            history_after_lines.append(formatted_line)
-            current_after_chars += line_length
+        parts = before + chunk + after
+        return "\n".join(parts) if parts else None
 
-        # Compose final context string using newlines for dialogue boundaries
-        context_parts = []
-
-        # Add previous dialogue
-        if history_before_lines:
-            context_parts.extend(history_before_lines)
-
-        # Add upcoming dialogue
-        if history_after_lines:
-            context_parts.extend(history_after_lines)
-
-        return "\n".join(context_parts) if context_parts else None
+    def _needs_retry(self, position: int, translated: str) -> str | None:
+        """Why a freshly translated cue must be asked for again, if it must."""
+        sub = self.subtitles[position]
+        visible = strip_tags(translated).replace(DIALOGUE_LINE_BREAK, " ").strip()
+        if not visible:
+            return "empty"
+        source = self.raw_contents.get(sub.index, "")
+        letters = sum(ch.isalpha() for ch in source)
+        if letters >= UNTRANSLATED_MIN_LETTERS and " ".join(visible.split()) == source:
+            return "untranslated"
+        return None
 
     def translate(
         self,
@@ -318,93 +402,85 @@ class SrtFile:
         """
         print("Starting translation")
 
-        # Detect scene boundaries
-        scene_starts = self._detect_scenes()
+        chunks = self._plan_chunks(translator.max_char, getattr(translator, "max_items", None))
         if os.environ.get("DEBUG_CONTEXT"):
-            print(f"Detected {len(scene_starts)} scenes in subtitle file")
+            print(f"Detected {len(self._detect_scenes())} scenes, planned {len(chunks)} requests")
 
-        # Build scene map (subtitle index -> (scene_idx, scene_start, scene_end))
-        scene_map = {}
-        for scene_idx, start_idx in enumerate(scene_starts):
-            end_idx = (
-                scene_starts[scene_idx + 1] - 1
-                if scene_idx + 1 < len(scene_starts)
-                else len(self.subtitles) - 1
-            )
-            for sub_idx in range(start_idx, end_idx + 1):
-                scene_map[sub_idx] = (scene_idx, start_idx, end_idx)
-
-        # For each chunk of the file (based on the translator capabilities)
-        chunk_num = 0
-        current_subtitle_idx = self.start_from
-
-        for subs_slice in self._get_next_chunk(translator.max_char):
-            chunk_num += 1
-            chunk_start_idx = current_subtitle_idx
-            chunk_end_idx = current_subtitle_idx + len(subs_slice) - 1
-
-            # Get scene info for this chunk
-            scene_idx, scene_start_idx, scene_end_idx = scene_map.get(
-                chunk_start_idx, (0, chunk_start_idx, chunk_end_idx)
-            )
-
-            # Build text array (only lines to translate)
+        for chunk_num, (chunk_start_idx, chunk_end_idx) in enumerate(chunks, start=1):
+            subs_slice = self.subtitles[chunk_start_idx : chunk_end_idx + 1]
             text = [sub.content for sub in subs_slice]
 
-            # Build DeepL context (surrounding lines)
-            surrounding_context = self._build_deepl_context(
-                scene_idx,
-                chunk_start_idx,
-                chunk_end_idx,
-                scene_start_idx,
-                scene_end_idx,
-            )
-
-            # Include current chunk lines in context (addressing blind spot)
-            # This helps lines within the same chunk inform each other's translation
-            chunk_context_lines = []
-            for sub in subs_slice:
-                raw = self.raw_contents.get(sub.index, sub.content.strip())
-                if raw and raw != "...":
-                    chunk_context_lines.append(raw)
-
-            # Combine: surrounding context + current chunk content
-            context_parts = []
-            if surrounding_context:
-                context_parts.append(surrounding_context)
-            if chunk_context_lines:
-                # Add current chunk as additional context
-                context_parts.append("\n".join(chunk_context_lines))
-
-            current_context = "\n".join(context_parts) if context_parts else None
+            current_context = self._build_deepl_context(chunk_start_idx, chunk_end_idx)
             current_context = fit_context(current_context, text)
 
-            # Debug output
             if os.environ.get("DEBUG_CONTEXT"):
-                if current_context:
-                    print(f"\n{'=' * 60}")
-                    print(f"[Chunk {chunk_num}] Lines {chunk_start_idx + 1}-{chunk_end_idx + 1}")
-                    print(f"Context:\n{current_context}")
-                    print(f"{'=' * 60}")
-                else:
-                    print(f"\n[Chunk {chunk_num}] No context (start of scene)")
+                print(f"\n{'=' * 60}")
+                print(f"[Chunk {chunk_num}] Lines {chunk_start_idx + 1}-{chunk_end_idx + 1}")
+                print(f"Context:\n{current_context}")
+                print(f"{'=' * 60}")
 
-            # Translate with context
             translation = translator.translate(
                 text, source_language, destination_language, context=current_context
             )
 
-            # Update subtitles with translations
             if isinstance(translation, str):
                 translation = translation.splitlines()
-            for i in range(len(subs_slice)):
-                subs_slice[i].content = translation[i]
+            if len(translation) != len(subs_slice):
+                # Raising keeps the cues translated so far in the .tmp backup;
+                # zipping would pair every later cue with the wrong text.
+                raise RuntimeError(
+                    f"Translator returned {len(translation)} cues for a request of "
+                    f"{len(subs_slice)} (lines {chunk_start_idx + 1}-{chunk_end_idx + 1})"
+                )
+
+            for offset, sub in enumerate(subs_slice):
+                translated = translation[offset]
+                reason = self._needs_retry(chunk_start_idx + offset, translated)
+                if reason:
+                    retried = translator.translate(
+                        sub.content, source_language, destination_language, context=current_context
+                    )
+                    if isinstance(retried, list):
+                        retried = retried[0] if retried else ""
+                    if self._needs_retry(chunk_start_idx + offset, retried) is None:
+                        translated = retried
+                    else:
+                        self.attention[sub.index] = reason
+                sub.content = self._repair_markers(sub.content, translated, sub.index)
                 self.current_subtitle += 1
-                current_subtitle_idx += 1
 
             self.progress_callback(len(self.subtitles), progress=self.current_subtitle)
 
+        self._log_reading_speed()
         print("... Translation done")
+
+    def _repair_markers(self, source: str, translated: str, index: int) -> str:
+        """Keep the dialogue placeholder only where the source had one.
+
+        A placeholder in a cue that was not dialogue would become a stray line
+        break; a dialogue cue that lost or gained speaker lines is flagged for
+        review instead, because only a reader can tell where the turn changes.
+        """
+        source_turns = source.count(DIALOGUE_LINE_BREAK)
+        if not source_turns:
+            return " ".join(translated.replace(DIALOGUE_LINE_BREAK, " ").split())
+        if translated.count(DIALOGUE_LINE_BREAK) != source_turns:
+            self.attention.setdefault(index, "dialogue_lines")
+        return translated
+
+    def _log_reading_speed(self) -> None:
+        fast = 0
+        for sub in self.subtitles[self.start_from :]:
+            duration = (sub.end - sub.start).total_seconds()
+            chars = len(strip_tags(sub.content).replace(DIALOGUE_LINE_BREAK, ""))
+            if duration > 0 and chars / duration > FAST_CPS:
+                fast += 1
+        if fast:
+            LOG.info("%d cue(s) read faster than %.0f characters per second", fast, FAST_CPS)
+        if self.attention:
+            LOG.info(
+                "%d cue(s) flagged for the proof-reader: %s", len(self.attention), self.attention
+            )
 
     def save_backup(self):
         self.subtitles = self.subtitles[: self.current_subtitle]
@@ -477,7 +553,7 @@ class SrtFile:
             # Calculate CPS
             duration = (sub.end - sub.start).total_seconds()
             if duration > 0:
-                content_length = len(sub.content.replace("\n", ""))
+                content_length = len(strip_tags(sub.content).replace("\n", ""))
                 cps = content_length / duration
 
                 if cps > target_cps:
