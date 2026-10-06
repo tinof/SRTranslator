@@ -270,6 +270,15 @@ wheels = [
 ]
 
 [[package]]
+name = "chardet"
+version = "5.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/0d/f7b6ab21ec75897ed80c17d79b15951a719226b9fababf1e40ea74d69079/chardet-5.2.0.tar.gz", hash = "sha256:1b3b6ff479a8c414bc3fa2c0852995695c4a026dcd6d0633b2dd092ca39c1cf7", size = 2069618, upload-time = "2023-08-01T19:23:02.662Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/38/6f/f5fbc992a329ee4e0f288c1fe0e2ad9485ed064cac731ed2fe47dcc38cbf/chardet-5.2.0-py3-none-any.whl", hash = "sha256:e1cf59446890a00105fe7b7912492ea04b6e6f06d4b742b2c788469e34c82970", size = 199385, upload-time = "2023-08-01T19:23:00.661Z" },
+]
+
+[[package]]
 name = "charset-normalizer"
 version = "3.4.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1174,12 +1183,14 @@ sdist = { url = "https://files.pythonhosted.org/packages/66/b7/4a1bc231e0681ebf3
 name = "srtranslator"
 source = { editable = "." }
 dependencies = [
+    { name = "chardet" },
     { name = "deepl" },
     { name = "free-proxy" },
     { name = "pyass" },
     { name = "pydeeplx" },
     { name = "selenium" },
     { name = "srt" },
+    { name = "subtitle-filter" },
     { name = "translatepy" },
     { name = "webdriverdownloader" },
 ]
@@ -1202,6 +1213,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "chardet", specifier = ">=5.2,<6" },
     { name = "deepl", specifier = ">=1.32.0" },
     { name = "free-proxy", specifier = ">=1.1.2" },
     { name = "google-genai", marker = "extra == 'proofread'", specifier = ">=1.61" },
@@ -1210,6 +1222,7 @@ requires-dist = [
     { name = "pydeeplx", specifier = ">=1.0.7" },
     { name = "selenium", specifier = ">=4.7.2" },
     { name = "srt", specifier = ">=3.5.3" },
+    { name = "subtitle-filter", specifier = ">=1.5,<2" },
     { name = "translatepy", specifier = ">=2.3" },
     { name = "webdriverdownloader", specifier = ">=1.1.0.4" },
 ]
@@ -1223,6 +1236,15 @@ dev = [
     { name = "pytest", specifier = ">=7.4" },
     { name = "pytest-sugar", specifier = ">=1.0" },
     { name = "ruff", specifier = ">=0.9" },
+]
+
+[[package]]
+name = "subtitle-filter"
+version = "1.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/6c/2a6200013d673700dd60562796560677c06822b09a05f2b35b6b754ec92a/subtitle_filter-1.5.1.tar.gz", hash = "sha256:3923f5e67f5358651e79974ccda325a84add96d5777cb6c71fc61b0d40badd73", size = 8760, upload-time = "2026-07-12T11:16:19.022Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/d4/268b7ad0099a6825c93476301be07eebe63f4e9e85b050e01f4c4560911d/subtitle_filter-1.5.1-py3-none-any.whl", hash = "sha256:193d4f087dd044b63cfa037e3ec4ffec284c7192c6b3360426ced0b9bf9f0f0f", size = 8550, upload-time = "2026-07-12T11:16:18.11Z" },
 ]
 
 [[package]]

@@ -27,12 +27,14 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
+  "chardet>=5.2,<6",
   "deepl>=1.32.0",
   "free_proxy>=1.1.2",
   "pyass>=0.1.4",
   "translatepy>=2.3",
   "selenium>=4.7.2",
   "srt>=3.5.3",
+  "subtitle-filter>=1.5,<2",
   "PyDeepLX>=1.0.7",
   "webdriverdownloader>=1.1.0.4",
 ]
