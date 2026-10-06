@@ -24,29 +24,74 @@ LOG = logging.getLogger("srtranslator")
 # Decoding
 # ---------------------------------------------------------------------------
 
-#: Below this confidence chardet guesses too often on short files.
-CHARDET_MIN_CONFIDENCE = 0.7
+#: A UTF-8 file with a few broken bytes is still a UTF-8 file. Up to this share
+#: of undecodable bytes (or 10 bytes) they are dropped, as the old reader did,
+#: instead of re-decoding the whole file in a guessed encoding.
+UTF8_MAX_ERROR_SHARE = 0.001
+
+#: Single-byte encodings subtitles come in, in order of preference on a tie.
+_SINGLE_BYTE_ENCODINGS = ("cp1252", "cp1250", "cp1251")
+
+#: Characters a wrong single-byte guess produces and real dialogue rarely holds:
+#: cp1252 read as cp1250 turns å into ĺ, cp1250 read as cp1252 turns ł into ³.
+_UNLIKELY_CHARS = re.compile("[¤¦¨ª¬¯°±²³´µ¶·¸¹º¼½¾×÷ŸĺĹŕŔţŢ˘ˇ˙˝˛ľĽ]")
+#: A Cyrillic letter inside a Latin word means cp1251 was the wrong guess.
+_MIXED_SCRIPT = re.compile("[A-Za-z][\u0400-\u04ff]|[\u0400-\u04ff][A-Za-z]")
+
+#: Multi-byte encodings that only chardet can recognise without a BOM.
+_MULTIBYTE_PREFIXES = ("utf-16", "utf-32", "gb", "big5", "euc-", "shift_jis", "cp932", "iso-2022")
+CHARDET_MIN_CONFIDENCE = 0.9
+
+
+def _mostly_utf8(raw: bytes) -> str | None:
+    """Text of a UTF-8 file with a few broken bytes, or None if it is not one."""
+    replaced = raw.decode("utf-8-sig", errors="replace")
+    dropped = raw.decode("utf-8-sig", errors="ignore")
+    errors = replaced.count("\ufffd") - dropped.count("\ufffd")
+    has_utf8_letters = any(ord(ch) > 127 and ch != "\ufffd" for ch in replaced)
+    if has_utf8_letters and errors <= max(10, int(len(raw) * UTF8_MAX_ERROR_SHARE)):
+        return dropped
+    return None
+
+
+def _implausibility(text: str) -> int:
+    return len(_UNLIKELY_CHARS.findall(text)) + len(_MIXED_SCRIPT.findall(text))
 
 
 def decode_subtitle_bytes(raw: bytes) -> str:
     """Decode a subtitle file, trying the encodings subtitles actually use.
 
-    UTF-8 first (with or without a BOM). Then chardet when it is confident, then
-    cp1252 and latin-1, which decode every byte. Reading with errors="ignore", as
-    before, silently dropped every accented letter of a cp1252 file.
+    BOM-marked UTF-16/32 and UTF-8 first. A UTF-8 file with a handful of broken
+    bytes loses only those bytes; re-reading it in a guessed encoding would garble
+    every letter. A multi-byte encoding chardet is sure of comes next. Otherwise
+    cp1252, cp1250 and cp1251 are each tried and the one producing the fewest
+    implausible characters wins. Reading with errors="ignore", as before, silently
+    dropped every accented letter of a cp1252 file.
     """
-    for encoding in ("utf-8-sig",):
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
         try:
-            return raw.decode(encoding)
+            return raw.decode("utf-16")
         except UnicodeDecodeError:
             pass
+
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+
+    mostly_utf8 = _mostly_utf8(raw)
+    if mostly_utf8 is not None:
+        return mostly_utf8
 
     try:
         import chardet
 
         guess = chardet.detect(raw)
-        encoding = guess.get("encoding")
-        if encoding and (guess.get("confidence") or 0) >= CHARDET_MIN_CONFIDENCE:
+        encoding = (guess.get("encoding") or "").lower()
+        if (
+            encoding.startswith(_MULTIBYTE_PREFIXES)
+            and (guess.get("confidence") or 0) >= CHARDET_MIN_CONFIDENCE
+        ):
             try:
                 return raw.decode(encoding)
             except (LookupError, UnicodeDecodeError):
@@ -54,10 +99,16 @@ def decode_subtitle_bytes(raw: bytes) -> str:
     except ImportError:
         pass
 
-    try:
-        return raw.decode("cp1252")
-    except UnicodeDecodeError:
-        return raw.decode("latin-1")
+    best: tuple[int, str] | None = None
+    for encoding in _SINGLE_BYTE_ENCODINGS:
+        try:
+            text = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        score = _implausibility(text)
+        if best is None or score < best[0]:
+            best = (score, text)
+    return best[1] if best else raw.decode("latin-1")
 
 
 # ---------------------------------------------------------------------------
@@ -65,12 +116,13 @@ def decode_subtitle_bytes(raw: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 #: Every HTML-style tag and every ASS override block such as {\an8}.
-TAG_RE = re.compile(r"<[^>]*>|\{\\[^}]*\}")
+#: Only tag-shaped text counts: "3 < 5 and 6 > 4" is dialogue, not markup.
+TAG_RE = re.compile(r"</?[A-Za-z][^<>]*>|\{\\[^}]*\}")
 _FONT_TAG_RE = re.compile(r"</?font\b[^>]*>", re.IGNORECASE)
 _ASS_OVERRIDE_RE = re.compile(r"\{\\[^}]*\}")
 _ITALIC_TAG_RE = re.compile(r"<(/?)i\s*>", re.IGNORECASE)
 #: Any tag that is not <i> or </i>.
-_OTHER_TAG_RE = re.compile(r"<(?!/?i\s*>)[^>]*>", re.IGNORECASE)
+_OTHER_TAG_RE = re.compile(r"<(?!/?i\s*>)/?[A-Za-z][^<>]*>", re.IGNORECASE)
 
 
 def strip_tags(text: str) -> str:
@@ -169,10 +221,44 @@ def _restore(text: str) -> str:
     return text.replace(_ITALIC_OPEN, "<i>").replace(_ITALIC_CLOSE, "</i>")
 
 
+#: Capitalised words that open real dialogue before a colon ("OK: fine").
+_NOT_SPEAKERS = frozenset(
+    "OK OKAY NO YES TV PS PM AM AD UK US USA EU UN FBI CIA NSA DEA ATF NYPD LAPD "
+    "CEO DJ ID IT PC GPS DNA SOS VIP".split()
+)
+
+#: Sound-effect groups: "(laughs)", "[door slams]", "*sighs*", "/off/". Non-greedy,
+#: so the dialogue between two groups survives. subtitle-filter's greedy rule
+#: deleted "I'm here." from "[door slams] I'm here. [gunshot]".
+_EFFECT_RES = (
+    re.compile(r"\([^()]*\)\s*:?"),
+    re.compile(r"\[[^\[\]]*\]\s*:?"),
+    re.compile(r"\*[^*\n]+\*"),
+    re.compile(r"/[^/\n]+/"),
+)
+
+
+def remove_sound_effects(text: str) -> str:
+    """Remove bracketed and starred annotations, keeping the dialogue around them.
+
+    Expects ``_protect``-ed text, so an in-word slash is not read as a delimiter.
+    """
+    for pattern in _EFFECT_RES:
+        text = pattern.sub("", text)
+    return text
+
+
+def _speaker_label(line: str) -> re.Match[str] | None:
+    match = _SPEAKER_LABEL_RE.match(line)
+    if match and match.group(2).strip() not in _NOT_SPEAKERS:
+        return match
+    return None
+
+
 def remove_speaker_labels(text: str) -> str:
     """Drop capitalised speaker labels; two labelled lines become dash dialogue."""
     lines = text.split("\n")
-    labelled = [bool(_SPEAKER_LABEL_RE.match(line)) for line in lines]
+    labelled = [_speaker_label(line) is not None for line in lines]
     if not any(labelled):
         return text
 
@@ -180,7 +266,7 @@ def remove_speaker_labels(text: str) -> str:
     cleaned = []
     for line, has_label in zip(lines, labelled, strict=True):
         if has_label:
-            match = _SPEAKER_LABEL_RE.match(line)
+            match = _speaker_label(line)
             assert match is not None
             rest = line[match.end() :]
             prefix = "- " if dialogue or match.group(1).strip() else ""
@@ -192,10 +278,12 @@ def remove_speaker_labels(text: str) -> str:
 def filter_sdh(subtitles: list[Subtitle]) -> list[Subtitle]:
     """Remove hearing-impaired annotations and return the cues that keep text.
 
-    Uses subtitle-filter's per-cue rules for asterisks, music, sound effects,
-    credits, comma spacing and lone dashes. Its font rule (which deletes the text
-    inside <font>) and its speaker rule (which deletes any capitalised phrase
-    before a colon) are replaced by ``clean_markup`` and ``remove_speaker_labels``.
+    Uses subtitle-filter's per-cue rules for asterisks, music, credits, comma
+    spacing and lone dashes. Three of its rules lose dialogue and are replaced:
+    the font rule (deletes the text inside <font>) by ``clean_markup``, the
+    speaker rule (deletes any capitalised phrase before a colon) by
+    ``remove_speaker_labels``, and the greedy sound-effect rule (deletes the
+    dialogue between two effects) by ``remove_sound_effects``.
     Cues left with no readable text are dropped and the rest renumbered.
     """
     try:
@@ -209,14 +297,16 @@ def filter_sdh(subtitles: list[Subtitle]) -> list[Subtitle]:
         text = clean_markup(subtitle.content, keep_italics=True)
         text = remove_speaker_labels(text)
 
+        protected = remove_sound_effects(_protect(text))
+        if not "".join(protected.split()):
+            continue
+
         cue = FilterCue()
         cue.index = subtitle.index or 1
-        cue.contents = _protect(text)
+        cue.contents = protected
         cue.remove_asterisks()
         if cue.index:
             cue.remove_music()
-        if cue.index:
-            cue.remove_sound_effects()
         if cue.index:
             cue.remove_author()
         if cue.index:
@@ -226,7 +316,8 @@ def filter_sdh(subtitles: list[Subtitle]) -> list[Subtitle]:
             continue
 
         text = balance_italics(_restore(cue.contents))
-        text = "\n".join(line.strip() for line in text.split("\n") if line.strip())
+        # Collapse the gaps a removed annotation leaves inside a line.
+        text = "\n".join(" ".join(line.split()) for line in text.split("\n") if line.strip())
         if is_markup_only(text):
             continue
         subtitle.content = text

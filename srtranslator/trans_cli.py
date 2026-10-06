@@ -106,7 +106,8 @@ def build_plex_output_path(input_path: Path, lang_code: str) -> Path:
     pattern = re.compile(r"\.[a-z]{2,3}(-[a-z]{2,3})?$", re.IGNORECASE)
     while match := pattern.search(base):
         base = base[: match.start()]
-    return input_path.with_name(f"{base}.{lang_code}.srt")
+    # Lower case, as the add-on expects it: "pt-PT" is DeepL's code, the file is .pt-pt.srt.
+    return input_path.with_name(f"{base}.{lang_code.lower()}.srt")
 
 
 def extract_subtitle_from_mkv(mkv_file: Path, output_srt: Path) -> bool:

@@ -152,3 +152,42 @@ def test_merged_italics_stay_one_balanced_span():
     assert merged(cue(1, 0, 1.0, "<i>I never</i>"), cue(2, 1.1, 2.0, "<i>said that.</i>")) == [
         (0.0, 2.0, "<i>I never said that.</i>")
     ]
+
+
+# --- review regressions -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "encoding"),
+    [
+        ("Hyvää päivää", "cp1252"),
+        ("Hej då, vi ses på måndag. Åh nej!", "cp1252"),
+        ("“Hyvää” – sanoi hän… ’ok’", "cp1252"),
+        ("¿Qué pasa? ¡Mañana!", "cp1252"),
+        ("Zażółć gęślą jaźń, příliš žluťoučký kůň", "cp1250"),
+        ("Привет, как дела? Всё хорошо.", "cp1251"),
+        ("Hyvää", "utf-16"),
+    ],
+)
+def test_short_files_decode_in_their_own_encoding(text, encoding):
+    body = "".join(f"{i}\n00:00:0{i},000 --> 00:00:0{i},900\n{text}\n\n" for i in range(1, 4))
+    assert text in preprocess.decode_subtitle_bytes(body.encode(encoding))
+
+
+def test_utf8_with_one_broken_byte_keeps_its_letters():
+    raw = ("Hyvää päivää ystävä, mitä kuuluu tänään?\n" * 20).encode() + b"\x81 ok"
+    assert preprocess.decode_subtitle_bytes(raw).startswith("Hyvää päivää ystävä")
+
+
+def test_dialogue_between_two_sound_effects_survives():
+    assert filtered("[door slams] I'm here. [gunshot]") == ["I'm here."]
+    assert filtered("Hey (laughs) you (sighs) there") == ["Hey you there"]
+
+
+def test_capitalised_words_that_are_not_speakers_stay():
+    assert filtered("OK: fine") == ["OK: fine"]
+    assert filtered("TV: on") == ["TV: on"]
+
+
+def test_text_between_angle_brackets_is_not_a_tag():
+    assert preprocess.strip_tags("a < b and c > d") == "a < b and c > d"

@@ -368,7 +368,7 @@ def load_subtitle(filepath: str, **srt_options):
 
 
 def is_finnish(lang: str) -> bool:
-    return (lang or "").strip().lower() in ("fi", "fin", "finnish")
+    return (lang or "").strip().lower().split("-")[0] in ("fi", "fin", "finnish")
 
 
 #: Arguments for sisusub's fix-finnish-subs, the same house style exsubs uses.

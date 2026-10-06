@@ -181,3 +181,12 @@ def test_trans_reports_a_failed_translation(tmp_path, monkeypatch):
     monkeypatch.setenv("DEEPL_API_KEY", "k")
     monkeypatch.setattr(trans_cli.srtranslator_cli, "main", lambda argv: 1)
     assert trans_cli.main([str(source)]) == 1
+
+
+def test_regional_finnish_runs_the_fixer():
+    assert cli.is_finnish("fi-FI") and cli.is_finnish("FI") and not cli.is_finnish("sv")
+
+
+def test_regional_target_file_name_is_lower_case(tmp_path):
+    out = trans_cli.build_plex_output_path(tmp_path / "tt1.src.srt", "pt-PT")
+    assert out.name == "tt1.pt-pt.srt"

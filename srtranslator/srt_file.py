@@ -211,7 +211,7 @@ class SrtFile:
 
             content = []
             for line in sub.content.split("\n"):
-                if len(line) > effective_limit:
+                if len(strip_tags(line)) > effective_limit:
                     line = self.wrap_line(line, effective_limit, max_lines)
                 content.append(line)
 
@@ -235,7 +235,11 @@ class SrtFile:
         wrapped_lines = []
         for word in text.split():
             # Check if inserting a word in the last sentence goes beyond the wrap limit
-            if len(wrapped_lines) != 0 and len(wrapped_lines[-1]) + len(word) + 1 < line_wrap_limit:
+            # Tags take no room on screen, so they do not count towards the limit.
+            if (
+                len(wrapped_lines) != 0
+                and len(strip_tags(wrapped_lines[-1])) + len(strip_tags(word)) + 1 < line_wrap_limit
+            ):
                 # If not, add it to it
                 wrapped_lines[-1] += f" {word}"
                 continue
@@ -300,14 +304,25 @@ class SrtFile:
             return size(first, last) < max_char
 
         def split(first: int, last: int) -> list[tuple[int, int]]:
-            if first == last or fits(first, last):
-                return [(first, last)]
-            # Cut after the cue followed by the longest pause.
-            cut = max(
-                range(first, last),
-                key=lambda i: (self.subtitles[i + 1].start - self.subtitles[i].end).total_seconds(),
-            )
-            return split(first, cut) + split(cut + 1, last)
+            # Iterative, with an explicit stack: a long scene whose longest pause
+            # always sits at one end would otherwise recurse once per cue.
+            pieces: list[tuple[int, int]] = []
+            pending = [(first, last)]
+            while pending:
+                lo, hi = pending.pop()
+                if lo == hi or fits(lo, hi):
+                    pieces.append((lo, hi))
+                    continue
+                # Cut after the cue followed by the longest pause.
+                cut = max(
+                    range(lo, hi),
+                    key=lambda i: (
+                        self.subtitles[i + 1].start - self.subtitles[i].end
+                    ).total_seconds(),
+                )
+                pending.append((cut + 1, hi))
+                pending.append((lo, cut))
+            return pieces
 
         blocks: list[tuple[int, int]] = []
         scene_starts = [s for s in self._detect_scenes() if s > start]
@@ -446,6 +461,11 @@ class SrtFile:
                         translated = retried
                     else:
                         self.attention[sub.index] = reason
+                        if reason == "empty":
+                            # Keep the source text rather than an empty cue: srt.compose
+                            # drops empty cues, so the .tmp backup would lose this one and
+                            # a resumed run would pair every later cue with the wrong text.
+                            translated = sub.content
                 sub.content = self._repair_markers(sub.content, translated, sub.index)
                 self.current_subtitle += 1
 

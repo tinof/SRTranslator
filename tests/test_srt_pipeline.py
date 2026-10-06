@@ -201,3 +201,36 @@ def test_lost_speaker_line_is_flagged(tmp_path):
     sub.translate(translator, "en", "fi")
 
     assert sub.attention == {1: "dialogue_lines"}
+
+
+# --- review regressions -------------------------------------------------------
+
+
+def test_still_empty_cue_keeps_source_text_so_resume_stays_aligned(tmp_path):
+    subs = [cue(i + 1, i * 40, i * 40 + 1, f"Line number {i}") for i in range(4)]
+    path = write_srt(tmp_path, subs)
+    sub = SrtFile(path)
+    translator = RecordingTranslator(replies={"Line number 1": "", ("single", "Line number 1"): ""})
+
+    sub.translate(translator, "en", "fi")
+
+    assert sub.attention == {2: "empty"}
+    assert [s.content for s in sub.subtitles][1] == "Line number 1"
+    sub.save_backup()
+    assert srt.compose(sub.subtitles).count("-->") == 4
+
+
+def test_skewed_long_scene_plans_without_recursion_error(tmp_path):
+    # One scene, pauses growing towards the end: the longest pause is always last.
+    subs, start = [], 0.0
+    for i in range(1500):
+        subs.append(cue(i + 1, start, start + 0.5, "word " * 8))
+        start += 0.5 + i * 0.0001
+    sub = SrtFile(write_srt(tmp_path, subs))
+    chunks = sub._plan_chunks(max_char=5000, max_items=50)
+    assert chunks[0][0] == 0 and chunks[-1][1] == 1499
+
+
+def test_wrapping_ignores_tag_characters():
+    text = "<i>Tämä rivi on juuri sopivan pitkä</i>"
+    assert SrtFile.wrap_line(text, line_wrap_limit=36, max_lines=2) == text

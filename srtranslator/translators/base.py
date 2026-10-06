@@ -27,6 +27,9 @@ class Translator(ABC):
         # Default implementation: join and split
         joined = "\n".join(text)
         result = self.translate_single(joined, source_language, destination_language, context)
+        if len(text) == 1:
+            # "".splitlines() is [], which would read as a lost cue.
+            return [result]
         return result.splitlines()
 
     @abstractmethod
